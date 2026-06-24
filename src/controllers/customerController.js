@@ -1,6 +1,35 @@
 const Customer = require("../models/Customer");
+const Order = require("../models/Order");
+const ReturnRequest = require("../models/ReturnRequest");
 const sendResponse = require("../utils/response");
 const { logActivity } = require("../utils/activityLogger");
+
+const getCustomerDeleteBlockers = async (customerId) => {
+  const [orderCount, returnRequestCount] = await Promise.all([
+    Order.countDocuments({ customer: customerId }),
+    ReturnRequest.countDocuments({ customer: customerId })
+  ]);
+
+  return { orderCount, returnRequestCount };
+};
+
+const buildCustomerDeleteBlockedMessage = ({ orderCount, returnRequestCount }) => {
+  const linkedRecords = [];
+
+  if (orderCount > 0) {
+    linkedRecords.push(`${orderCount} order${orderCount === 1 ? "" : "s"}`);
+  }
+
+  if (returnRequestCount > 0) {
+    linkedRecords.push(
+      `${returnRequestCount} return/exchange request${returnRequestCount === 1 ? "" : "s"}`
+    );
+  }
+
+  return `Cannot delete this customer because they have linked ${linkedRecords.join(
+    " and "
+  )}. Set status to inactive instead to preserve order and return history.`;
+};
 
 const createCustomer = async (req, res) => {
   try {
@@ -185,6 +214,18 @@ const deleteCustomer = async (req, res) => {
 
     if (!customer) {
       return sendResponse(res, 404, false, "Customer not found");
+    }
+
+    const blockers = await getCustomerDeleteBlockers(customer._id);
+
+    if (blockers.orderCount > 0 || blockers.returnRequestCount > 0) {
+      return sendResponse(
+        res,
+        409,
+        false,
+        buildCustomerDeleteBlockedMessage(blockers),
+        blockers
+      );
     }
 
     await logActivity({

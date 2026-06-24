@@ -4,7 +4,9 @@ const {
   getPublicProductBySlug,
   getPublicCategories,
   getPublicBrands,
-  getPublicSettings
+  getPublicSettings,
+  getPublicShippingOptions,
+  getPublicPaymentOptions
 } = require("../controllers/publicController");
 const { getPublicPageBySlug, getPublicPages } = require("../controllers/pageController");
 
@@ -15,6 +17,8 @@ router.get("/products/:slug", getPublicProductBySlug);
 router.get("/categories", getPublicCategories);
 router.get("/brands", getPublicBrands);
 router.get("/settings", getPublicSettings);
+router.get("/shipping-options", getPublicShippingOptions);
+router.get("/payment-options", getPublicPaymentOptions);
 router.get("/pages", getPublicPages);
 router.get("/pages/:slug", getPublicPageBySlug);
 

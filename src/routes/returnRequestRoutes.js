@@ -5,6 +5,8 @@ const {
   getAllReturnRequests,
   getReturnRequestById,
   updateReturnRequestStatus,
+  createReplacementOrder,
+  linkReplacementOrder,
   deleteReturnRequest
 } = require("../controllers/returnRequestController");
 
@@ -16,6 +18,8 @@ router.post("/", createReturnRequest);
 router.get("/", getAllReturnRequests);
 router.get("/:id", getReturnRequestById);
 router.put("/:id/status", updateReturnRequestStatus);
+router.post("/:id/replacement-order", createReplacementOrder);
+router.put("/:id/replacement-order", linkReplacementOrder);
 router.delete("/:id", deleteReturnRequest);
 
 module.exports = router;

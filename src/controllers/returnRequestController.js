@@ -4,6 +4,23 @@ const Customer = require("../models/Customer");
 const sendResponse = require("../utils/response");
 const { logActivity } = require("../utils/activityLogger");
 const { getFulfillmentSnapshot } = require("../utils/orderFulfillment");
+const {
+  createReplacementOrderForReturn,
+  linkReplacementOrderToReturn
+} = require("../services/replacementOrderService");
+
+const populateReturnRequest = (query) =>
+  query
+    .populate("order", "orderNumber orderStatus paymentStatus totalAmount fulfillment shippingAddressSnapshot")
+    .populate("customer", "firstName lastName email phone address")
+    .populate("items.product", "name sku featuredImage galleryImages")
+    .populate(
+      "replacementOrder",
+      "orderNumber orderStatus paymentStatus totalAmount fulfillment orderKind sourceOrder returnRequest"
+    )
+    .populate("createdBy", "name email")
+    .populate("updatedBy", "name email")
+    .populate("reviewedBy", "name email");
 
 const allowedTypes = ["return", "exchange"];
 const allowedStatuses = [
@@ -141,13 +158,9 @@ const createReturnRequest = async (req, res) => {
       userAgent: req.get("User-Agent")
     });
 
-    const populatedReturnRequest = await ReturnRequest.findById(returnRequest._id)
-      .populate("order", "orderNumber orderStatus paymentStatus totalAmount fulfillment")
-      .populate("customer", "firstName lastName email phone")
-      .populate("items.product", "name sku featuredImage")
-      .populate("createdBy", "name email")
-      .populate("updatedBy", "name email")
-      .populate("reviewedBy", "name email");
+    const populatedReturnRequest = await populateReturnRequest(
+      ReturnRequest.findById(returnRequest._id)
+    );
 
     return sendResponse(
       res,
@@ -226,12 +239,7 @@ const getAllReturnRequests = async (req, res) => {
     const skip = (currentPage - 1) * pageLimit;
     const sortDirection = sortOrder === "asc" ? 1 : -1;
 
-    const returnRequests = await ReturnRequest.find(query)
-      .populate("order", "orderNumber orderStatus paymentStatus totalAmount fulfillment")
-      .populate("customer", "firstName lastName email phone")
-      .populate("createdBy", "name email")
-      .populate("updatedBy", "name email")
-      .populate("reviewedBy", "name email")
+    const returnRequests = await populateReturnRequest(ReturnRequest.find(query))
       .sort({ [sortBy]: sortDirection })
       .skip(skip)
       .limit(pageLimit);
@@ -254,13 +262,7 @@ const getAllReturnRequests = async (req, res) => {
 
 const getReturnRequestById = async (req, res) => {
   try {
-    const returnRequest = await ReturnRequest.findById(req.params.id)
-      .populate("order", "orderNumber orderStatus paymentStatus totalAmount items fulfillment shippingAddressSnapshot")
-      .populate("customer", "firstName lastName email phone address")
-      .populate("items.product", "name sku featuredImage galleryImages")
-      .populate("createdBy", "name email")
-      .populate("updatedBy", "name email")
-      .populate("reviewedBy", "name email");
+    const returnRequest = await populateReturnRequest(ReturnRequest.findById(req.params.id));
 
     if (!returnRequest) {
       return sendResponse(res, 404, false, "Return request not found");
@@ -313,6 +315,24 @@ const updateReturnRequestStatus = async (req, res) => {
         400,
         false,
         "Refund amount cannot exceed the order total."
+      );
+    }
+
+    if (status === "exchanged" && returnRequest.type !== "exchange") {
+      return sendResponse(
+        res,
+        400,
+        false,
+        "Only exchange requests can be marked as exchanged."
+      );
+    }
+
+    if (status === "exchanged" && !returnRequest.replacementOrder) {
+      return sendResponse(
+        res,
+        400,
+        false,
+        "Create or link a replacement order before marking this exchange as exchanged."
       );
     }
 
@@ -397,13 +417,9 @@ const updateReturnRequestStatus = async (req, res) => {
       userAgent: req.get("User-Agent")
     });
 
-    const populatedReturnRequest = await ReturnRequest.findById(returnRequest._id)
-      .populate("order", "orderNumber orderStatus paymentStatus totalAmount fulfillment")
-      .populate("customer", "firstName lastName email phone")
-      .populate("items.product", "name sku featuredImage")
-      .populate("createdBy", "name email")
-      .populate("updatedBy", "name email")
-      .populate("reviewedBy", "name email");
+    const populatedReturnRequest = await populateReturnRequest(
+      ReturnRequest.findById(returnRequest._id)
+    );
 
     return sendResponse(
       res,
@@ -414,6 +430,96 @@ const updateReturnRequestStatus = async (req, res) => {
     );
   } catch (error) {
     return sendResponse(res, 500, false, error.message);
+  }
+};
+
+const createReplacementOrder = async (req, res) => {
+  try {
+    const { returnRequest, replacementOrder } = await createReplacementOrderForReturn(
+      req.params.id,
+      req.admin?._id || null
+    );
+
+    await logActivity({
+      admin: req.admin?._id || null,
+      action: "REPLACEMENT_ORDER_CREATED",
+      module: "RETURN",
+      description: `Replacement order created for exchange request`,
+      entityId: returnRequest._id.toString(),
+      entityType: "ReturnRequest",
+      metadata: {
+        replacementOrderId: replacementOrder._id.toString(),
+        replacementOrderNumber: replacementOrder.orderNumber,
+        sourceOrderId: String(returnRequest.order)
+      },
+      ipAddress: req.ip,
+      userAgent: req.get("User-Agent")
+    });
+
+    await logActivity({
+      admin: req.admin?._id || null,
+      action: "ORDER_CREATED",
+      module: "ORDER",
+      description: `Replacement order created: ${replacementOrder.orderNumber}`,
+      entityId: replacementOrder._id.toString(),
+      entityType: "Order",
+      metadata: {
+        orderKind: "replacement",
+        returnRequestId: returnRequest._id.toString(),
+        sourceOrderId: String(returnRequest.order)
+      },
+      ipAddress: req.ip,
+      userAgent: req.get("User-Agent")
+    });
+
+    const populatedReturnRequest = await populateReturnRequest(
+      ReturnRequest.findById(returnRequest._id)
+    );
+
+    return sendResponse(res, 201, true, "Replacement order created successfully", {
+      returnRequest: populatedReturnRequest,
+      replacementOrder
+    });
+  } catch (error) {
+    return sendResponse(res, 400, false, error.message);
+  }
+};
+
+const linkReplacementOrder = async (req, res) => {
+  try {
+    const { replacementOrderId } = req.body;
+
+    if (!replacementOrderId) {
+      return sendResponse(res, 400, false, "replacementOrderId is required");
+    }
+
+    const { returnRequest } = await linkReplacementOrderToReturn(
+      req.params.id,
+      replacementOrderId,
+      req.admin?._id || null
+    );
+
+    await logActivity({
+      admin: req.admin?._id || null,
+      action: "REPLACEMENT_ORDER_LINKED",
+      module: "RETURN",
+      description: "Replacement order linked to exchange request",
+      entityId: returnRequest._id.toString(),
+      entityType: "ReturnRequest",
+      metadata: {
+        replacementOrderId: String(returnRequest.replacementOrder)
+      },
+      ipAddress: req.ip,
+      userAgent: req.get("User-Agent")
+    });
+
+    const populatedReturnRequest = await populateReturnRequest(
+      ReturnRequest.findById(returnRequest._id)
+    );
+
+    return sendResponse(res, 200, true, "Replacement order linked successfully", populatedReturnRequest);
+  } catch (error) {
+    return sendResponse(res, 400, false, error.message);
   }
 };
 
@@ -463,5 +569,7 @@ module.exports = {
   getAllReturnRequests,
   getReturnRequestById,
   updateReturnRequestStatus,
+  createReplacementOrder,
+  linkReplacementOrder,
   deleteReturnRequest
 };

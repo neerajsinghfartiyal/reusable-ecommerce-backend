@@ -7,11 +7,19 @@ const {
   clearCart,
   applyCouponToCart,
   removeCouponFromCart,
+  getCartShippingOptions,
+  setCartShippingMethod,
+  getCartPaymentOptions,
+  setCartPaymentMethod,
   checkoutCart
 } = require("../controllers/cartController");
 
 const router = express.Router();
 
+router.get("/:sessionId/shipping-options", getCartShippingOptions);
+router.put("/:sessionId/shipping-method", setCartShippingMethod);
+router.get("/:sessionId/payment-options", getCartPaymentOptions);
+router.put("/:sessionId/payment-method", setCartPaymentMethod);
 router.get("/:sessionId", getCart);
 router.post("/:sessionId/items", addToCart);
 router.put("/:sessionId/items/:productId", updateCartItem);

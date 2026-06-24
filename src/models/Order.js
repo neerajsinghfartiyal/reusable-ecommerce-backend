@@ -91,6 +91,92 @@ const addressSnapshotSchema = new mongoose.Schema(
   }
 );
 
+const shippingMethodSnapshotSchema = new mongoose.Schema(
+  {
+    methodId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ShippingMethod",
+      default: null
+    },
+    code: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    name: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    displayName: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    type: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    instructions: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    charge: {
+      type: Number,
+      default: 0,
+      min: 0
+    }
+  },
+  {
+    _id: false
+  }
+);
+
+const paymentMethodSnapshotSchema = new mongoose.Schema(
+  {
+    methodId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "PaymentMethod",
+      default: null
+    },
+    code: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    name: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    displayName: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    type: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    provider: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    instructions: {
+      type: String,
+      trim: true,
+      default: ""
+    }
+  },
+  {
+    _id: false
+  }
+);
+
 const fulfillmentSchema = new mongoose.Schema(
   {
     status: {
@@ -168,6 +254,15 @@ const orderSchema = new mongoose.Schema(
       default: 0,
       min: 0
     },
+    shippingMethod: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ShippingMethod",
+      default: null
+    },
+    shippingMethodSnapshot: {
+      type: shippingMethodSnapshotSchema,
+      default: null
+    },
     discountAmount: {
       type: Number,
       default: 0,
@@ -210,6 +305,15 @@ const orderSchema = new mongoose.Schema(
       ],
       default: "pending"
     },
+    paymentMethodRef: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "PaymentMethod",
+      default: null
+    },
+    paymentMethodSnapshot: {
+      type: paymentMethodSnapshotSchema,
+      default: null
+    },
     paymentMethod: {
       type: String,
       default: "",
@@ -240,6 +344,21 @@ const orderSchema = new mongoose.Schema(
       type: String,
       enum: ["pending", "processing", "shipped", "delivered", "cancelled"],
       default: "pending"
+    },
+    orderKind: {
+      type: String,
+      enum: ["standard", "replacement"],
+      default: "standard"
+    },
+    sourceOrder: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Order",
+      default: null
+    },
+    returnRequest: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ReturnRequest",
+      default: null
     },
     notes: {
       type: String,

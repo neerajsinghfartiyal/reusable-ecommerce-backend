@@ -14,6 +14,18 @@ const {
   buildAddressSnapshot,
   buildInitialFulfillment
 } = require("../utils/orderFulfillment");
+const {
+  buildLocationFromCustomer,
+  getStoreShippingSettings,
+  listCheckoutShippingOptions,
+  quoteShippingMethod,
+  applyStoreFreeShippingOverride
+} = require("../services/shippingMethodService");
+const {
+  buildLocationFromCustomer: buildPaymentLocationFromCustomer,
+  listCheckoutPaymentOptions,
+  quotePaymentMethod
+} = require("../services/paymentMethodService");
 
 const getSessionIdFromRequest = (req) => {
   const sessionId = req.params.sessionId || req.body.sessionId;
@@ -36,14 +48,15 @@ const getOrCreateActiveCart = async (sessionId) => {
 const populateCartById = async (cartId) => {
   return Cart.findById(cartId)
     .populate("items.product", "name slug featuredImage price salePrice quantity")
-    .populate("coupon", "code discountType discountValue");
+    .populate("coupon", "code discountType discountValue")
+    .populate("shippingMethod", "name code displayName type")
+    .populate("paymentMethodRef", "name code displayName type provider");
 };
 
 const calculateCartTotals = (cart) => {
   cart.subtotal = cart.items.reduce((sum, item) => sum + (item.total || 0), 0);
 
   cart.taxAmount = 0;
-  cart.shippingAmount = 0;
 
   let calculatedDiscount = 0;
 
@@ -55,7 +68,54 @@ const calculateCartTotals = (cart) => {
 
   cart.discountAmount = Math.min(calculatedDiscount, cart.subtotal);
 
-  cart.totalAmount = cart.subtotal + cart.taxAmount + cart.shippingAmount - cart.discountAmount;
+  cart.totalAmount =
+    cart.subtotal + (cart.shippingAmount || 0) + cart.taxAmount - cart.discountAmount;
+};
+
+const getCartItemCount = (cart) =>
+  (cart.items || []).reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+
+const recalculateCartShipping = async (cart, { customer = null, location = null } = {}) => {
+  const { shippingEnabled } = await getStoreShippingSettings();
+
+  if (!shippingEnabled) {
+    cart.shippingMethod = null;
+    cart.shippingMethodCode = "";
+    cart.shippingAmount = 0;
+    return;
+  }
+
+  if (!cart.shippingMethod && !cart.shippingMethodCode) {
+    cart.shippingAmount = 0;
+    return;
+  }
+
+  const resolvedLocation = location || buildLocationFromCustomer(customer || {});
+  const quote = await quoteShippingMethod({
+    shippingMethodId: cart.shippingMethod,
+    shippingMethodCode: cart.shippingMethodCode,
+    subtotal: cart.subtotal,
+    itemCount: getCartItemCount(cart),
+    location: resolvedLocation,
+    shippingEnabled
+  });
+
+  if (quote.error || !quote.method) {
+    cart.shippingMethod = null;
+    cart.shippingMethodCode = "";
+    cart.shippingAmount = 0;
+    return;
+  }
+
+  cart.shippingMethod = quote.method._id;
+  cart.shippingMethodCode = quote.method.code;
+  cart.shippingAmount = await applyStoreFreeShippingOverride(quote.charge, cart.subtotal);
+};
+
+const refreshCartTotals = async (cart, shippingContext = {}) => {
+  calculateCartTotals(cart);
+  await recalculateCartShipping(cart, shippingContext);
+  calculateCartTotals(cart);
 };
 
 const clearCouponFields = (cart) => {
@@ -63,6 +123,17 @@ const clearCouponFields = (cart) => {
   cart.couponCode = "";
   cart.couponDiscountType = "";
   cart.couponDiscountValue = 0;
+};
+
+const clearShippingFields = (cart) => {
+  cart.shippingMethod = null;
+  cart.shippingMethodCode = "";
+  cart.shippingAmount = 0;
+};
+
+const clearPaymentFields = (cart) => {
+  cart.paymentMethodRef = null;
+  cart.paymentMethodCode = "";
 };
 
 const getCart = async (req, res) => {
@@ -148,7 +219,7 @@ const addToCart = async (req, res) => {
       });
     }
 
-    calculateCartTotals(cart);
+    await refreshCartTotals(cart);
     await cart.save();
 
     const populatedCart = await populateCartById(cart._id);
@@ -185,7 +256,7 @@ const updateCartItem = async (req, res) => {
 
     if (updatedQuantity <= 0) {
       cart.items.splice(itemIndex, 1);
-      calculateCartTotals(cart);
+      await refreshCartTotals(cart);
       await cart.save();
 
       const populatedCart = await populateCartById(cart._id);
@@ -217,7 +288,7 @@ const updateCartItem = async (req, res) => {
     item.featuredImage = product.featuredImage || "";
     item.total = finalPrice * updatedQuantity;
 
-    calculateCartTotals(cart);
+    await refreshCartTotals(cart);
     await cart.save();
 
     const populatedCart = await populateCartById(cart._id);
@@ -240,7 +311,7 @@ const removeCartItem = async (req, res) => {
     const cart = await getOrCreateActiveCart(sessionId);
     cart.items = cart.items.filter((item) => String(item.product) !== String(productId));
 
-    calculateCartTotals(cart);
+    await refreshCartTotals(cart);
     await cart.save();
 
     const populatedCart = await populateCartById(cart._id);
@@ -263,6 +334,8 @@ const clearCart = async (req, res) => {
 
     cart.items = [];
     clearCouponFields(cart);
+    clearShippingFields(cart);
+    clearPaymentFields(cart);
     calculateCartTotals(cart);
 
     await cart.save();
@@ -334,7 +407,7 @@ const applyCouponToCart = async (req, res) => {
     cart.couponDiscountType = coupon.discountType;
     cart.couponDiscountValue = coupon.discountValue;
 
-    calculateCartTotals(cart);
+    await refreshCartTotals(cart);
     await cart.save();
 
     const populatedCart = await populateCartById(cart._id);
@@ -355,7 +428,7 @@ const removeCouponFromCart = async (req, res) => {
 
     const cart = await getOrCreateActiveCart(sessionId);
     clearCouponFields(cart);
-    calculateCartTotals(cart);
+    await refreshCartTotals(cart);
 
     await cart.save();
 
@@ -370,7 +443,8 @@ const removeCouponFromCart = async (req, res) => {
 const checkoutCart = async (req, res) => {
   try {
     const sessionId = getSessionIdFromRequest(req);
-    const { customer, notes } = req.body;
+    const { customer, notes, shippingMethodId, shippingMethodCode, paymentMethodId, paymentMethodCode } =
+      req.body;
 
     if (!sessionId) {
       return sendResponse(res, 400, false, "Session ID is required");
@@ -419,7 +493,94 @@ const checkoutCart = async (req, res) => {
       });
     }
 
-    calculateCartTotals(cart);
+    if (shippingMethodId || shippingMethodCode) {
+      cart.shippingMethod = shippingMethodId || cart.shippingMethod;
+      cart.shippingMethodCode = shippingMethodCode || cart.shippingMethodCode;
+    }
+
+    if (paymentMethodId || paymentMethodCode) {
+      cart.paymentMethodRef = paymentMethodId || cart.paymentMethodRef;
+      cart.paymentMethodCode = paymentMethodCode || cart.paymentMethodCode;
+    }
+
+    await refreshCartTotals(cart, { customer: existingCustomer });
+
+    const { shippingEnabled } = await getStoreShippingSettings();
+    const shippingOptions = await listCheckoutShippingOptions({
+      subtotal: cart.subtotal,
+      itemCount: getCartItemCount(cart),
+      location: buildLocationFromCustomer(existingCustomer),
+      shippingEnabled
+    });
+
+    let shippingSnapshot = null;
+    let finalShippingAmount = cart.shippingAmount || 0;
+    let selectedShippingMethodId = cart.shippingMethod || null;
+
+    if (shippingEnabled && shippingOptions.length > 0) {
+      const selectedMethodId = shippingMethodId || cart.shippingMethod;
+      const selectedMethodCode = shippingMethodCode || cart.shippingMethodCode;
+
+      if (!selectedMethodId && !selectedMethodCode) {
+        return sendResponse(res, 400, false, "Shipping method is required for checkout");
+      }
+
+      const quote = await quoteShippingMethod({
+        shippingMethodId: selectedMethodId,
+        shippingMethodCode: selectedMethodCode,
+        subtotal: cart.subtotal,
+        itemCount: getCartItemCount(cart),
+        location: buildLocationFromCustomer(existingCustomer),
+        shippingEnabled
+      });
+
+      if (quote.error) {
+        return sendResponse(res, 400, false, quote.error);
+      }
+
+      finalShippingAmount = await applyStoreFreeShippingOverride(quote.charge, cart.subtotal);
+      shippingSnapshot = quote.snapshot
+        ? { ...quote.snapshot, charge: finalShippingAmount }
+        : null;
+      selectedShippingMethodId = quote.method?._id || null;
+      cart.shippingAmount = finalShippingAmount;
+      calculateCartTotals(cart);
+    }
+
+    const paymentOptions = await listCheckoutPaymentOptions({
+      subtotal: cart.subtotal,
+      location: buildPaymentLocationFromCustomer(existingCustomer)
+    });
+
+    let paymentSnapshot = null;
+    let selectedPaymentMethodId = cart.paymentMethodRef || null;
+    let initialPaymentStatus = "pending";
+    let paymentMethodLabel = "";
+
+    if (paymentOptions.length > 0) {
+      const selectedPaymentId = paymentMethodId || cart.paymentMethodRef;
+      const selectedPaymentCode = paymentMethodCode || cart.paymentMethodCode;
+
+      if (!selectedPaymentId && !selectedPaymentCode) {
+        return sendResponse(res, 400, false, "Payment method is required for checkout");
+      }
+
+      const paymentQuote = await quotePaymentMethod({
+        paymentMethodId: selectedPaymentId,
+        paymentMethodCode: selectedPaymentCode,
+        subtotal: cart.subtotal,
+        location: buildPaymentLocationFromCustomer(existingCustomer)
+      });
+
+      if (paymentQuote.error) {
+        return sendResponse(res, 400, false, paymentQuote.error);
+      }
+
+      paymentSnapshot = paymentQuote.snapshot;
+      selectedPaymentMethodId = paymentQuote.method?._id || null;
+      initialPaymentStatus = paymentQuote.initialPaymentStatus;
+      paymentMethodLabel = paymentQuote.label;
+    }
 
     const order = await Order.create({
       customer,
@@ -433,14 +594,19 @@ const checkoutCart = async (req, res) => {
       })),
       subtotal: cart.subtotal,
       taxAmount: cart.taxAmount,
-      shippingAmount: cart.shippingAmount,
+      shippingAmount: finalShippingAmount,
+      shippingMethod: selectedShippingMethodId,
+      shippingMethodSnapshot: shippingSnapshot,
       discountAmount: cart.discountAmount,
       coupon: cart.coupon || null,
       couponCode: cart.couponCode || "",
       couponDiscountType: cart.couponDiscountType || "",
       couponDiscountValue: cart.couponDiscountValue || 0,
       totalAmount: cart.totalAmount,
-      paymentStatus: "pending",
+      paymentStatus: initialPaymentStatus,
+      paymentMethodRef: selectedPaymentMethodId,
+      paymentMethodSnapshot: paymentSnapshot,
+      paymentMethod: paymentMethodLabel,
       shippingAddressSnapshot: buildAddressSnapshot(existingCustomer),
       fulfillment: buildInitialFulfillment({ orderStatus: "pending" }),
       orderStatus: "pending",
@@ -485,7 +651,9 @@ const checkoutCart = async (req, res) => {
 
     const createdOrder = await Order.findById(order._id)
       .populate("customer", "firstName lastName email phone")
-      .populate("items.product", "name sku featuredImage");
+      .populate("items.product", "name sku featuredImage")
+      .populate("shippingMethod", "name code displayName type")
+      .populate("paymentMethodRef", "name code displayName type provider");
 
     await logActivity({
       admin: null,
@@ -498,6 +666,8 @@ const checkoutCart = async (req, res) => {
         paymentStatus: order.paymentStatus,
         orderStatus: order.orderStatus,
         totalAmount: order.totalAmount,
+        shippingMethodCode: shippingSnapshot?.code || "",
+        paymentMethodCode: paymentSnapshot?.code || "",
         source: "checkout"
       },
       ipAddress: req.ip,
@@ -539,6 +709,219 @@ const checkoutCart = async (req, res) => {
   }
 };
 
+const getCartShippingOptions = async (req, res) => {
+  try {
+    const sessionId = getSessionIdFromRequest(req);
+    const { customer: customerId } = req.query;
+
+    if (!sessionId) {
+      return sendResponse(res, 400, false, "Session ID is required");
+    }
+
+    const cart = await Cart.findOne({ sessionId, status: "active" });
+
+    if (!cart) {
+      return sendResponse(res, 404, false, "Active cart not found");
+    }
+
+    if (!Array.isArray(cart.items) || cart.items.length === 0) {
+      return sendResponse(res, 400, false, "Cart is empty");
+    }
+
+    calculateCartTotals(cart);
+
+    let customer = null;
+    if (customerId) {
+      customer = await Customer.findById(customerId);
+      if (!customer) {
+        return sendResponse(res, 404, false, "Customer not found");
+      }
+    }
+
+    const { shippingEnabled } = await getStoreShippingSettings();
+    const shippingOptions = await listCheckoutShippingOptions({
+      subtotal: cart.subtotal,
+      itemCount: getCartItemCount(cart),
+      location: buildLocationFromCustomer(customer || {}),
+      shippingEnabled
+    });
+
+    const optionsWithStoreOverride = await Promise.all(
+      shippingOptions.map(async (option) => ({
+        ...option,
+        charge: await applyStoreFreeShippingOverride(option.charge, cart.subtotal)
+      }))
+    );
+
+    return sendResponse(res, 200, true, "Cart shipping options fetched successfully", {
+      shippingEnabled,
+      subtotal: cart.subtotal,
+      selectedShippingMethod: cart.shippingMethod,
+      selectedShippingMethodCode: cart.shippingMethodCode,
+      shippingAmount: cart.shippingAmount,
+      shippingOptions: optionsWithStoreOverride
+    });
+  } catch (error) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+const setCartShippingMethod = async (req, res) => {
+  try {
+    const sessionId = getSessionIdFromRequest(req);
+    const { shippingMethodId, shippingMethodCode, customer: customerId } = req.body;
+
+    if (!sessionId) {
+      return sendResponse(res, 400, false, "Session ID is required");
+    }
+
+    if (!shippingMethodId && !shippingMethodCode) {
+      return sendResponse(res, 400, false, "Shipping method ID or code is required");
+    }
+
+    const cart = await getOrCreateActiveCart(sessionId);
+
+    if (!Array.isArray(cart.items) || cart.items.length === 0) {
+      return sendResponse(res, 400, false, "Cart is empty");
+    }
+
+    let customer = null;
+    if (customerId) {
+      customer = await Customer.findById(customerId);
+      if (!customer) {
+        return sendResponse(res, 404, false, "Customer not found");
+      }
+    }
+
+    calculateCartTotals(cart);
+
+    const { shippingEnabled } = await getStoreShippingSettings();
+    const quote = await quoteShippingMethod({
+      shippingMethodId,
+      shippingMethodCode,
+      subtotal: cart.subtotal,
+      itemCount: getCartItemCount(cart),
+      location: buildLocationFromCustomer(customer || {}),
+      shippingEnabled
+    });
+
+    if (quote.error) {
+      return sendResponse(res, 400, false, quote.error);
+    }
+
+    cart.shippingMethod = quote.method._id;
+    cart.shippingMethodCode = quote.method.code;
+    cart.shippingAmount = await applyStoreFreeShippingOverride(quote.charge, cart.subtotal);
+    calculateCartTotals(cart);
+
+    await cart.save();
+
+    const populatedCart = await populateCartById(cart._id);
+
+    return sendResponse(res, 200, true, "Cart shipping method updated successfully", populatedCart);
+  } catch (error) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+const getCartPaymentOptions = async (req, res) => {
+  try {
+    const sessionId = getSessionIdFromRequest(req);
+    const { customer: customerId } = req.query;
+
+    if (!sessionId) {
+      return sendResponse(res, 400, false, "Session ID is required");
+    }
+
+    const cart = await Cart.findOne({ sessionId, status: "active" });
+
+    if (!cart) {
+      return sendResponse(res, 404, false, "Active cart not found");
+    }
+
+    if (!Array.isArray(cart.items) || cart.items.length === 0) {
+      return sendResponse(res, 400, false, "Cart is empty");
+    }
+
+    calculateCartTotals(cart);
+
+    let customer = null;
+    if (customerId) {
+      customer = await Customer.findById(customerId);
+      if (!customer) {
+        return sendResponse(res, 404, false, "Customer not found");
+      }
+    }
+
+    const paymentOptions = await listCheckoutPaymentOptions({
+      subtotal: cart.subtotal,
+      location: buildPaymentLocationFromCustomer(customer || {})
+    });
+
+    return sendResponse(res, 200, true, "Cart payment options fetched successfully", {
+      subtotal: cart.subtotal,
+      selectedPaymentMethod: cart.paymentMethodRef,
+      selectedPaymentMethodCode: cart.paymentMethodCode,
+      paymentOptions
+    });
+  } catch (error) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+const setCartPaymentMethod = async (req, res) => {
+  try {
+    const sessionId = getSessionIdFromRequest(req);
+    const { paymentMethodId, paymentMethodCode, customer: customerId } = req.body;
+
+    if (!sessionId) {
+      return sendResponse(res, 400, false, "Session ID is required");
+    }
+
+    if (!paymentMethodId && !paymentMethodCode) {
+      return sendResponse(res, 400, false, "Payment method ID or code is required");
+    }
+
+    const cart = await getOrCreateActiveCart(sessionId);
+
+    if (!Array.isArray(cart.items) || cart.items.length === 0) {
+      return sendResponse(res, 400, false, "Cart is empty");
+    }
+
+    let customer = null;
+    if (customerId) {
+      customer = await Customer.findById(customerId);
+      if (!customer) {
+        return sendResponse(res, 404, false, "Customer not found");
+      }
+    }
+
+    calculateCartTotals(cart);
+
+    const quote = await quotePaymentMethod({
+      paymentMethodId,
+      paymentMethodCode,
+      subtotal: cart.subtotal,
+      location: buildPaymentLocationFromCustomer(customer || {})
+    });
+
+    if (quote.error) {
+      return sendResponse(res, 400, false, quote.error);
+    }
+
+    cart.paymentMethodRef = quote.method._id;
+    cart.paymentMethodCode = quote.method.code;
+
+    await cart.save();
+
+    const populatedCart = await populateCartById(cart._id);
+
+    return sendResponse(res, 200, true, "Cart payment method updated successfully", populatedCart);
+  } catch (error) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
 module.exports = {
   getCart,
   addToCart,
@@ -547,5 +930,9 @@ module.exports = {
   clearCart,
   applyCouponToCart,
   removeCouponFromCart,
+  getCartShippingOptions,
+  setCartShippingMethod,
+  getCartPaymentOptions,
+  setCartPaymentMethod,
   checkoutCart
 };

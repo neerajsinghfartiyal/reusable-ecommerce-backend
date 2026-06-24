@@ -94,6 +94,26 @@ const cartSchema = new mongoose.Schema(
       default: 0,
       min: 0
     },
+    shippingMethod: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ShippingMethod",
+      default: null
+    },
+    shippingMethodCode: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    paymentMethodRef: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "PaymentMethod",
+      default: null
+    },
+    paymentMethodCode: {
+      type: String,
+      default: "",
+      trim: true
+    },
     discountAmount: {
       type: Number,
       default: 0,

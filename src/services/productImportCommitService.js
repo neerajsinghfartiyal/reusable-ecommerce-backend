@@ -20,6 +20,13 @@ const {
   markResolversForAutoCreate,
 } = require("./productImportResolverService");
 const { logActivity } = require("../utils/activityLogger");
+const { toStoredImageUrl } = require("../utils/normalizeMediaUrl");
+const {
+  createImportMediaContext,
+  resolveImportProductMedia,
+  backfillProductMediaIds,
+  summarizeImportMediaContext,
+} = require("./productImportMediaService");
 
 const parseGallery = (value) =>
   String(value || "")
@@ -139,7 +146,7 @@ const buildVariationPayload = (row, catalogs, variationAttributes = []) => {
     price: Number(data.price || 0),
     salePrice: data.sale_price ? Number(data.sale_price) : null,
     quantity: data.stock ? Number(data.stock) : 0,
-    image: data.featured_image || "",
+    image: toStoredImageUrl(data.featured_image || ""),
     status: mapVariationStatus(data.status),
     attributes: variationAttributes,
   };
@@ -293,9 +300,19 @@ const upsertSimpleProduct = async ({
   strategy,
   catalogs,
   adminId,
+  importMediaContext,
 }) => {
   const data = row.normalizedData || {};
   const existing = catalogs.skuIndex.get(row.sku);
+  const mediaFields = await resolveImportProductMedia({
+    featuredImageUrl: data.featured_image || "",
+    galleryImageUrls: parseGallery(data.gallery_images),
+    adminId,
+    productName: row.productName,
+    sku: row.sku,
+    importContext: importMediaContext,
+  });
+
   const payload = {
     name: row.productName,
     sku: row.sku,
@@ -307,8 +324,10 @@ const upsertSimpleProduct = async ({
     unitType: entityIds.unitTypeId || null,
     shortDescription: data.short_description || "",
     description: data.description || "",
-    featuredImage: data.featured_image || "",
-    galleryImages: parseGallery(data.gallery_images),
+    featuredImage: mediaFields.featuredImage,
+    featuredMediaId: mediaFields.featuredMediaId,
+    galleryImages: mediaFields.galleryImages,
+    galleryMediaIds: mediaFields.galleryMediaIds,
     status: mapImportStatus(data.status),
     attributes: [],
     variations: [],
@@ -324,6 +343,7 @@ const upsertSimpleProduct = async ({
     if (!product) throw new Error("Existing product not found for update.");
     Object.assign(product, payload);
     await product.save();
+    await backfillProductMediaIds(product, importMediaContext);
     return { action: "updated", productId: product._id.toString() };
   }
 
@@ -343,6 +363,7 @@ const upsertVariableProductWithVariations = async ({
   strategy,
   catalogs,
   adminId,
+  importMediaContext,
 }) => {
   const data = variableRow.normalizedData || {};
   const existing = catalogs.skuIndex.get(variableRow.sku);
@@ -354,6 +375,14 @@ const upsertVariableProductWithVariations = async ({
   }
 
   const attributes = buildVariableAttributes(variableRow, variationRows, catalogs);
+  const mediaFields = await resolveImportProductMedia({
+    featuredImageUrl: data.featured_image || "",
+    galleryImageUrls: parseGallery(data.gallery_images),
+    adminId,
+    productName: variableRow.productName,
+    sku: variableRow.sku,
+    importContext: importMediaContext,
+  });
 
   const payload = {
     name: variableRow.productName,
@@ -366,8 +395,10 @@ const upsertVariableProductWithVariations = async ({
     unitType: entityIds.unitTypeId || null,
     shortDescription: data.short_description || "",
     description: data.description || "",
-    featuredImage: data.featured_image || "",
-    galleryImages: parseGallery(data.gallery_images),
+    featuredImage: mediaFields.featuredImage,
+    featuredMediaId: mediaFields.featuredMediaId,
+    galleryImages: mediaFields.galleryImages,
+    galleryMediaIds: mediaFields.galleryMediaIds,
     status: mapImportStatus(data.status),
     attributes,
     variations,
@@ -379,6 +410,7 @@ const upsertVariableProductWithVariations = async ({
     if (!product) throw new Error("Existing variable product not found for update.");
     Object.assign(product, payload);
     await product.save();
+    await backfillProductMediaIds(product, importMediaContext);
     return { action: "updated", productId: product._id.toString() };
   }
 
@@ -419,6 +451,8 @@ const runProductImport = async ({
     checkNameDuplicates,
     autoCreateCatalog,
   });
+
+  const importMediaContext = await createImportMediaContext();
 
   const result = {
     importedCount: 0,
@@ -471,6 +505,7 @@ const runProductImport = async ({
           strategy,
           catalogs,
           adminId,
+          importMediaContext,
         });
         if (outcome.action === "updated") result.updatedCount += 1;
         else result.importedCount += 1;
@@ -562,10 +597,12 @@ const runProductImport = async ({
         const outcome = await upsertVariableProductWithVariations({
           variableRow,
           variations,
+          variationRows,
           entityIds,
           strategy,
           catalogs,
           adminId,
+          importMediaContext,
         });
         if (outcome.action === "updated") result.updatedCount += 1;
         else result.importedCount += 1;
@@ -617,12 +654,15 @@ const runProductImport = async ({
     userAgent: adminMeta.userAgent,
   });
 
+  const mediaSummary = summarizeImportMediaContext(importMediaContext);
+
   return {
     ...result,
     status,
     historyId: history._id.toString(),
     duplicateSummary: preview.duplicateSummary,
     schemaVersion: preview.schemaVersion,
+    mediaSummary,
   };
 };
 

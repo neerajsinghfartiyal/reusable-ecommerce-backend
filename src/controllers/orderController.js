@@ -20,6 +20,17 @@ const {
   canTransitionFulfillment,
   applyOrderStatusForFulfillment
 } = require("../utils/orderFulfillment");
+const {
+  buildLocationFromCustomer,
+  getStoreShippingSettings,
+  quoteShippingMethod,
+  applyStoreFreeShippingOverride
+} = require("../services/shippingMethodService");
+const {
+  buildLocationFromCustomer: buildPaymentLocationFromCustomer,
+  listCheckoutPaymentOptions,
+  quotePaymentMethod
+} = require("../services/paymentMethodService");
 
 const FINAL_ORDER_STATUSES = ["cancelled", "delivered"];
 
@@ -67,7 +78,11 @@ const buildFulfillmentStatusFilter = (status) => {
 const getPopulatedOrder = (orderId) =>
   Order.findById(orderId)
     .populate("customer", "firstName lastName email phone address")
-    .populate("items.product", "name sku featuredImage galleryImages");
+    .populate("items.product", "name sku featuredImage galleryImages")
+    .populate("shippingMethod", "name code displayName type")
+    .populate("paymentMethodRef", "name code displayName type provider")
+    .populate("sourceOrder", "orderNumber orderStatus totalAmount")
+    .populate("returnRequest", "type status reason");
 
 const buildFulfillmentActivityDescription = (action, fulfillment) => {
   const trackingText = fulfillment?.trackingNumber
@@ -174,7 +189,12 @@ const createOrder = async (req, res) => {
       couponCode,
       paymentStatus,
       orderStatus,
-      notes
+      notes,
+      shippingMethodId,
+      shippingMethodCode,
+      paymentMethodId,
+      paymentMethodCode,
+      paymentMethod
     } = req.body;
 
     if (!customer) {
@@ -195,7 +215,7 @@ const createOrder = async (req, res) => {
     const stockUpdates = [];
     let subtotal = 0;
     const finalOrderStatus = orderStatus || "pending";
-    const finalPaymentStatus = paymentStatus || "pending";
+    let finalPaymentStatus = paymentStatus || "pending";
     const shouldReduceStock = finalOrderStatus !== "cancelled";
 
     if (!ORDER_STATUS_OPTIONS.includes(finalOrderStatus)) {
@@ -253,8 +273,10 @@ const createOrder = async (req, res) => {
     }
 
     const finalTaxAmount = Number(taxAmount) || 0;
-    const finalShippingAmount = Number(shippingAmount) || 0;
+    let finalShippingAmount = Number(shippingAmount) || 0;
     let finalDiscountAmount = Number(discountAmount) || 0;
+    let shippingSnapshot = null;
+    let selectedShippingMethodId = null;
 
     let appliedCoupon = null;
     let appliedCouponCode = "";
@@ -312,6 +334,56 @@ const createOrder = async (req, res) => {
       appliedCouponDiscountValue = coupon.discountValue;
     }
 
+    const { shippingEnabled } = await getStoreShippingSettings();
+    const itemCount = orderItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+
+    if (shippingMethodId || shippingMethodCode) {
+      const quote = await quoteShippingMethod({
+        shippingMethodId,
+        shippingMethodCode,
+        subtotal,
+        itemCount,
+        location: buildLocationFromCustomer(existingCustomer),
+        shippingEnabled
+      });
+
+      if (quote.error) {
+        return sendResponse(res, 400, false, quote.error);
+      }
+
+      finalShippingAmount = await applyStoreFreeShippingOverride(quote.charge, subtotal);
+      shippingSnapshot = quote.snapshot
+        ? { ...quote.snapshot, charge: finalShippingAmount }
+        : null;
+      selectedShippingMethodId = quote.method?._id || null;
+    } else if (!shippingEnabled) {
+      finalShippingAmount = 0;
+    }
+
+    let paymentSnapshot = null;
+    let selectedPaymentMethodId = null;
+    let paymentMethodLabel = paymentMethod ? String(paymentMethod).trim() : "";
+
+    if (paymentMethodId || paymentMethodCode) {
+      const paymentQuote = await quotePaymentMethod({
+        paymentMethodId,
+        paymentMethodCode,
+        subtotal,
+        location: buildPaymentLocationFromCustomer(existingCustomer)
+      });
+
+      if (paymentQuote.error) {
+        return sendResponse(res, 400, false, paymentQuote.error);
+      }
+
+      paymentSnapshot = paymentQuote.snapshot;
+      selectedPaymentMethodId = paymentQuote.method?._id || null;
+      paymentMethodLabel = paymentQuote.label;
+      if (!paymentStatus) {
+        finalPaymentStatus = paymentQuote.initialPaymentStatus;
+      }
+    }
+
     const totalAmount =
       subtotal + finalTaxAmount + finalShippingAmount - finalDiscountAmount;
     const shippingAddressSnapshot = buildAddressSnapshot(existingCustomer);
@@ -326,6 +398,8 @@ const createOrder = async (req, res) => {
       subtotal,
       taxAmount: finalTaxAmount,
       shippingAmount: finalShippingAmount,
+      shippingMethod: selectedShippingMethodId,
+      shippingMethodSnapshot: shippingSnapshot,
       discountAmount: finalDiscountAmount,
       coupon: appliedCoupon ? appliedCoupon._id : null,
       couponCode: appliedCouponCode,
@@ -333,6 +407,9 @@ const createOrder = async (req, res) => {
       couponDiscountValue: appliedCouponDiscountValue,
       totalAmount,
       paymentStatus: finalPaymentStatus,
+      paymentMethodRef: selectedPaymentMethodId,
+      paymentMethodSnapshot: paymentSnapshot,
+      paymentMethod: paymentMethodLabel,
       shippingAddressSnapshot,
       fulfillment,
       orderStatus: finalOrderStatus,
@@ -373,7 +450,11 @@ const createOrder = async (req, res) => {
 
     const populatedOrder = await Order.findById(order._id)
       .populate("customer", "firstName lastName email phone")
-      .populate("items.product", "name sku featuredImage");
+      .populate("items.product", "name sku featuredImage")
+      .populate("shippingMethod", "name code displayName type")
+    .populate("paymentMethodRef", "name code displayName type provider")
+    .populate("sourceOrder", "orderNumber orderStatus totalAmount")
+    .populate("returnRequest", "type status reason");
 
     await logActivity({
       admin: req.admin._id,
@@ -481,6 +562,8 @@ const getAllOrders = async (req, res) => {
     const orders = await Order.find(query)
       .populate("customer", "firstName lastName email phone")
       .populate("items.product", "name sku featuredImage")
+      .populate("shippingMethod", "name code displayName type")
+      .populate("paymentMethodRef", "name code displayName type provider")
       .sort({ [sortBy]: sortDirection })
       .skip(skip)
       .limit(pageLimit);
@@ -505,7 +588,11 @@ const getOrderById = async (req, res) => {
   try {
     const order = await Order.findById(req.params.id)
       .populate("customer", "firstName lastName email phone address")
-      .populate("items.product", "name sku featuredImage galleryImages");
+      .populate("items.product", "name sku featuredImage galleryImages")
+      .populate("shippingMethod", "name code displayName type")
+      .populate("paymentMethodRef", "name code displayName type provider")
+      .populate("sourceOrder", "orderNumber orderStatus totalAmount")
+      .populate("returnRequest", "type status reason");
 
     if (!order) {
       return sendResponse(res, 404, false, "Order not found");
@@ -631,7 +718,8 @@ const updateOrderStatus = async (req, res) => {
 
 const updatePaymentStatus = async (req, res) => {
   try {
-    const { paymentStatus, paymentMethod, paymentReference, notes } = req.body;
+    const { paymentStatus, paymentMethod, paymentReference, notes, paymentMethodId, paymentMethodCode } =
+      req.body;
 
     if (!paymentStatus) {
       return sendResponse(res, 400, false, "Payment status is required");
@@ -654,7 +742,24 @@ const updatePaymentStatus = async (req, res) => {
 
     order.paymentStatus = paymentStatus;
 
-    if (paymentMethod !== undefined) {
+    if (paymentMethodId || paymentMethodCode) {
+      const paymentQuote = await quotePaymentMethod({
+        paymentMethodId,
+        paymentMethodCode,
+        subtotal: order.subtotal,
+        location: buildPaymentLocationFromCustomer(
+          await Customer.findById(order.customer).lean()
+        )
+      });
+
+      if (paymentQuote.error) {
+        return sendResponse(res, 400, false, paymentQuote.error);
+      }
+
+      order.paymentMethodRef = paymentQuote.method?._id || null;
+      order.paymentMethodSnapshot = paymentQuote.snapshot;
+      order.paymentMethod = paymentQuote.label;
+    } else if (paymentMethod !== undefined) {
       order.paymentMethod = paymentMethod;
     }
 

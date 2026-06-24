@@ -1,6 +1,10 @@
 const StoreSetting = require("../models/StoreSetting");
 const sendResponse = require("../utils/response");
 const { logActivity } = require("../utils/activityLogger");
+const {
+  applyStoreSettingsUpdate,
+  toStoreSettingsResponse
+} = require("../utils/storeSettingMapper");
 
 const getStoreSettings = async (req, res) => {
   try {
@@ -12,7 +16,13 @@ const getStoreSettings = async (req, res) => {
       });
     }
 
-    return sendResponse(res, 200, true, "Store settings fetched successfully", settings);
+    return sendResponse(
+      res,
+      200,
+      true,
+      "Store settings fetched successfully",
+      toStoreSettingsResponse(settings)
+    );
   } catch (error) {
     return sendResponse(res, 500, false, error.message);
   }
@@ -20,36 +30,15 @@ const getStoreSettings = async (req, res) => {
 
 const updateStoreSettings = async (req, res) => {
   try {
-    const {
-      storeName,
-      storeEmail,
-      storePhone,
-      currency,
-      logo,
-      address,
-      taxPercentage,
-      shippingCharge,
-      maintenanceMode
-    } = req.body;
-
     let settings = await StoreSetting.findOne();
 
     if (!settings) {
       settings = await StoreSetting.create({
-        storeName: storeName || "My Store"
+        storeName: req.body?.storeName || "My Store"
       });
     }
 
-    if (storeName !== undefined) settings.storeName = storeName;
-    if (storeEmail !== undefined) settings.storeEmail = storeEmail;
-    if (storePhone !== undefined) settings.storePhone = storePhone;
-    if (currency !== undefined) settings.currency = currency;
-    if (logo !== undefined) settings.logo = logo;
-    if (address !== undefined) settings.address = address;
-    if (taxPercentage !== undefined) settings.taxPercentage = taxPercentage;
-    if (shippingCharge !== undefined) settings.shippingCharge = shippingCharge;
-    if (maintenanceMode !== undefined) settings.maintenanceMode = maintenanceMode;
-
+    applyStoreSettingsUpdate(settings, req.body);
     settings.updatedBy = req.admin._id;
 
     await settings.save();
@@ -65,7 +54,13 @@ const updateStoreSettings = async (req, res) => {
       userAgent: req.get("User-Agent")
     });
 
-    return sendResponse(res, 200, true, "Store settings updated successfully", settings);
+    return sendResponse(
+      res,
+      200,
+      true,
+      "Store settings updated successfully",
+      toStoreSettingsResponse(settings)
+    );
   } catch (error) {
     return sendResponse(res, 500, false, error.message);
   }

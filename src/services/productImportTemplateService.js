@@ -5,11 +5,15 @@
 
 const fs = require("fs");
 const path = require("path");
+const XLSX = require("xlsx");
 const {
   TEMPLATE_VERSION,
   IMPORT_HEADERS,
   EXAMPLE_ROWS,
   PRODUCT_IMPORT_COLUMNS,
+  rowToOrderedValues,
+  buildFieldReferenceRows,
+  buildInstructionsRows,
 } = require("../config/productImportSchema");
 
 const escapeCsvCell = (value) => {
@@ -39,18 +43,57 @@ const XLSX_TEMPLATE_PATH = path.join(
   "product-import-template.xlsx",
 );
 
-const getXlsxBuffer = () => {
-  if (!fs.existsSync(XLSX_TEMPLATE_PATH)) {
-    const error = new Error(
-      "XLSX template file is missing. Run: node scripts/generateProductImportTemplateXlsx.js",
-    );
-    error.code = "XLSX_TEMPLATE_MISSING";
-    throw error;
-  }
-  return fs.readFileSync(XLSX_TEMPLATE_PATH);
+const buildXlsxBuffer = () => {
+  const exampleValueRows = EXAMPLE_ROWS.map(rowToOrderedValues);
+  const workbook = XLSX.utils.book_new();
+
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.aoa_to_sheet([IMPORT_HEADERS, ...exampleValueRows]),
+    "Products",
+  );
+
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.aoa_to_sheet(buildInstructionsRows()),
+    "Instructions",
+  );
+
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.aoa_to_sheet(buildFieldReferenceRows()),
+    "Field Reference",
+  );
+
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.aoa_to_sheet([IMPORT_HEADERS, exampleValueRows[0]]),
+    "Examples",
+  );
+
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.aoa_to_sheet([
+      IMPORT_HEADERS,
+      exampleValueRows[1],
+      exampleValueRows[2],
+      exampleValueRows[3],
+    ]),
+    "Variation Examples",
+  );
+
+  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
 };
 
-const hasXlsxTemplate = () => fs.existsSync(XLSX_TEMPLATE_PATH);
+const getXlsxBuffer = () => buildXlsxBuffer();
+
+const hasXlsxTemplate = () => true;
+
+const writeXlsxTemplateFile = (filePath = XLSX_TEMPLATE_PATH) => {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, buildXlsxBuffer());
+  return filePath;
+};
 
 module.exports = {
   TEMPLATE_VERSION,
@@ -59,7 +102,9 @@ module.exports = {
   PRODUCT_IMPORT_COLUMNS,
   buildCsvContent,
   getCsvBuffer,
+  buildXlsxBuffer,
   getXlsxBuffer,
   hasXlsxTemplate,
+  writeXlsxTemplateFile,
   XLSX_TEMPLATE_PATH,
 };

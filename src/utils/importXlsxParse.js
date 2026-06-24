@@ -1,34 +1,14 @@
 /**
- * Optional XLSX parser for import preview.
- * Uses `xlsx` only if available (not in package.json).
- * Dev fallback: scripts/.xlsx-gen-cache from template generator.
+ * XLSX parser for product import preview/run.
+ * Production uses the official `xlsx` package from package.json.
  */
-
-const fs = require("fs");
-const path = require("path");
 
 const loadXlsxModule = () => {
   try {
     return require("xlsx");
   } catch (_) {
-    // not in package.json
+    return null;
   }
-
-  const cacheModulePath = path.join(
-    __dirname,
-    "..",
-    "..",
-    "scripts",
-    ".xlsx-gen-cache",
-    "node_modules",
-    "xlsx",
-  );
-
-  if (fs.existsSync(path.join(cacheModulePath, "package.json"))) {
-    return require(cacheModulePath);
-  }
-
-  return null;
 };
 
 const isXlsxParserAvailable = () => Boolean(loadXlsxModule());
@@ -37,7 +17,7 @@ const parseXlsxToRecords = (buffer) => {
   const XLSX = loadXlsxModule();
   if (!XLSX) {
     const error = new Error(
-      "XLSX parsing is not available on the server. Upload a CSV file, or approve adding the xlsx package to package.json.",
+      "XLSX parsing is not available on the server. Upload a CSV file or reinstall backend dependencies (xlsx package).",
     );
     error.code = "XLSX_PARSER_UNAVAILABLE";
     throw error;

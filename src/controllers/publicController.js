@@ -115,32 +115,82 @@ const getPublicBrands = async (req, res) => {
   }
 };
 
+const {
+  toPublicStoreSettings
+} = require("../utils/storeSettingMapper");
+const {
+  buildLocationFromAddress,
+  getStoreShippingSettings,
+  listCheckoutShippingOptions,
+  applyStoreFreeShippingOverride
+} = require("../services/shippingMethodService");
+const {
+  buildLocationFromAddress: buildPaymentLocationFromAddress,
+  listCheckoutPaymentOptions
+} = require("../services/paymentMethodService");
+
 const getPublicSettings = async (req, res) => {
   try {
     const settings = await StoreSetting.findOne();
 
-    if (!settings) {
-      return sendResponse(res, 200, true, "Public settings fetched successfully", {
-        storeName: "My Store",
-        storeEmail: "",
-        storePhone: "",
-        currency: "USD",
-        logo: "",
-        taxPercentage: 0,
-        shippingCharge: 0,
-        maintenanceMode: false
-      });
-    }
+    return sendResponse(
+      res,
+      200,
+      true,
+      "Public settings fetched successfully",
+      toPublicStoreSettings(settings)
+    );
+  } catch (error) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
 
-    return sendResponse(res, 200, true, "Public settings fetched successfully", {
-      storeName: settings.storeName || "My Store",
-      storeEmail: settings.storeEmail || "",
-      storePhone: settings.storePhone || "",
-      currency: settings.currency || "USD",
-      logo: settings.logo || "",
-      taxPercentage: settings.taxPercentage || 0,
-      shippingCharge: settings.shippingCharge || 0,
-      maintenanceMode: settings.maintenanceMode || false
+const getPublicShippingOptions = async (req, res) => {
+  try {
+    const { subtotal = 0, country, state, postalCode, itemCount = 0 } = req.query;
+    const { shippingEnabled } = await getStoreShippingSettings();
+    const location = buildLocationFromAddress({ country, state, postalCode });
+    const parsedSubtotal = Number(subtotal) > 0 ? Number(subtotal) : 0;
+    const parsedItemCount = Number(itemCount) > 0 ? Number(itemCount) : 0;
+
+    const shippingOptions = await listCheckoutShippingOptions({
+      subtotal: parsedSubtotal,
+      itemCount: parsedItemCount,
+      location,
+      shippingEnabled
+    });
+
+    const optionsWithStoreOverride = await Promise.all(
+      shippingOptions.map(async (option) => ({
+        ...option,
+        charge: await applyStoreFreeShippingOverride(option.charge, parsedSubtotal)
+      }))
+    );
+
+    return sendResponse(res, 200, true, "Public shipping options fetched successfully", {
+      shippingEnabled,
+      subtotal: parsedSubtotal,
+      shippingOptions: optionsWithStoreOverride
+    });
+  } catch (error) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+const getPublicPaymentOptions = async (req, res) => {
+  try {
+    const { subtotal = 0, country } = req.query;
+    const parsedSubtotal = Number(subtotal) > 0 ? Number(subtotal) : 0;
+    const location = buildPaymentLocationFromAddress({ country });
+
+    const paymentOptions = await listCheckoutPaymentOptions({
+      subtotal: parsedSubtotal,
+      location
+    });
+
+    return sendResponse(res, 200, true, "Public payment options fetched successfully", {
+      subtotal: parsedSubtotal,
+      paymentOptions
     });
   } catch (error) {
     return sendResponse(res, 500, false, error.message);
@@ -152,5 +202,7 @@ module.exports = {
   getPublicProductBySlug,
   getPublicCategories,
   getPublicBrands,
-  getPublicSettings
+  getPublicSettings,
+  getPublicShippingOptions,
+  getPublicPaymentOptions
 };

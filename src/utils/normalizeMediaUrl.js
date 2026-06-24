@@ -3,14 +3,6 @@
  * Aligns with admin MediaPicker normalizeMediaUrlPath behavior.
  */
 
-const getApiBaseUrl = () =>
-  String(
-    process.env.API_BASE_URL ||
-      process.env.APP_URL ||
-      process.env.VITE_API_BASE_URL ||
-      "http://localhost:5000",
-  ).replace(/\/$/, "");
-
 const normalizeMediaUrlPath = (url) => {
   const trimmed = String(url || "").trim().replace(/\\/g, "/");
   if (!trimmed) return "";
@@ -38,7 +30,29 @@ const normalizeMediaUrlPath = (url) => {
   return path.replace(/\/+/g, "/").toLowerCase();
 };
 
+const getApiBaseUrl = () =>
+  String(
+    process.env.API_BASE_URL ||
+      process.env.APP_URL ||
+      process.env.VITE_API_BASE_URL ||
+      "http://localhost:5000",
+  ).replace(/\/$/, "");
+
+const toStoredImageUrl = (url) => {
+  const trimmed = String(url || "").trim();
+  if (!trimmed) return "";
+
+  const baseUrl = getApiBaseUrl();
+  if (baseUrl && trimmed.startsWith(baseUrl)) {
+    const relative = trimmed.slice(baseUrl.length);
+    return relative.startsWith("/") ? relative : `/${relative}`;
+  }
+
+  return trimmed;
+};
+
 module.exports = {
   normalizeMediaUrlPath,
   getApiBaseUrl,
+  toStoredImageUrl,
 };

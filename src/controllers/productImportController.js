@@ -2,7 +2,6 @@ const sendResponse = require("../utils/response");
 const {
   getCsvBuffer,
   getXlsxBuffer,
-  hasXlsxTemplate,
 } = require("../services/productImportTemplateService");
 const {
   buildEnhancedImportPreviewFromFile,
@@ -42,15 +41,6 @@ const downloadProductImportTemplateCsv = (req, res) => {
 
 const downloadProductImportTemplateXlsx = (req, res) => {
   try {
-    if (!hasXlsxTemplate()) {
-      return res.status(503).json({
-        success: false,
-        message:
-          "XLSX template is not available on the server. Use CSV template or run scripts/generateProductImportTemplateXlsx.js.",
-        placeholder: true,
-      });
-    }
-
     const buffer = getXlsxBuffer();
     res.setHeader(
       "Content-Type",
@@ -64,7 +54,7 @@ const downloadProductImportTemplateXlsx = (req, res) => {
   } catch (error) {
     return res.status(500).json({
       success: false,
-      message: error.message || "Failed to load XLSX template.",
+      message: error.message || "Failed to generate XLSX template.",
     });
   }
 };

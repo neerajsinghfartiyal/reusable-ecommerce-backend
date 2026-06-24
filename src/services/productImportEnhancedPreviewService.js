@@ -15,6 +15,27 @@ const {
 
 const DUPLICATE_STRATEGIES = ["skip_duplicates", "update_existing", "create_only"];
 
+const parseGalleryUrls = (value) =>
+  String(value || "")
+    .split("|")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+const buildMediaImportSummary = (normalizedData = {}) => {
+  const featured = Boolean(String(normalizedData.featured_image || "").trim());
+  const galleryCount = parseGalleryUrls(normalizedData.gallery_images).length;
+
+  if (!featured && galleryCount === 0) {
+    return null;
+  }
+
+  return {
+    featuredImage: featured,
+    galleryCount,
+    note: "Image URLs will be linked to Media Library records when this row is imported.",
+  };
+};
+
 const getValidationState = (row) => {
   if (row.errors?.length) return "error";
   if (row.warnings?.length) return "warning";
@@ -127,6 +148,7 @@ const enrichPreviewRows = (preview, catalogs, options = {}) => {
       resolverState,
       resolvers: resolversWithAuto,
       nameDuplicate,
+      mediaImport: buildMediaImportSummary(row.normalizedData || {}),
       badges: [],
     };
     enriched.badges = buildRowBadges(enriched);
