@@ -1,6 +1,7 @@
 const Product = require("../models/Product");
 const Category = require("../models/Category");
 const Brand = require("../models/Brand");
+const Customer = require("../models/Customer");
 const StoreSetting = require("../models/StoreSetting");
 const sendResponse = require("../utils/response");
 
@@ -197,6 +198,56 @@ const getPublicPaymentOptions = async (req, res) => {
   }
 };
 
+const upsertCheckoutCustomer = async (req, res) => {
+  try {
+    const { firstName, lastName, email, phone, address } = req.body;
+
+    if (!firstName || !String(firstName).trim()) {
+      return sendResponse(res, 400, false, "First name is required");
+    }
+
+    if (!email || !String(email).trim()) {
+      return sendResponse(res, 400, false, "Email is required");
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const customerPayload = {
+      firstName: String(firstName).trim(),
+      lastName: String(lastName || "").trim(),
+      phone: String(phone || "").trim(),
+      address: {
+        street: String(address?.street || "").trim(),
+        city: String(address?.city || "").trim(),
+        state: String(address?.state || "").trim(),
+        postalCode: String(address?.postalCode || "").trim(),
+        country: String(address?.country || "").trim()
+      },
+      status: "active"
+    };
+
+    let customer = await Customer.findOne({ email: normalizedEmail });
+
+    if (customer) {
+      customer.firstName = customerPayload.firstName;
+      customer.lastName = customerPayload.lastName;
+      customer.phone = customerPayload.phone;
+      customer.address = customerPayload.address;
+      customer.status = customerPayload.status;
+      await customer.save();
+    } else {
+      customer = await Customer.create({
+        ...customerPayload,
+        email: normalizedEmail,
+        createdBy: null
+      });
+    }
+
+    return sendResponse(res, 200, true, "Checkout customer saved successfully", customer);
+  } catch (error) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
 module.exports = {
   getPublicProducts,
   getPublicProductBySlug,
@@ -204,5 +255,6 @@ module.exports = {
   getPublicBrands,
   getPublicSettings,
   getPublicShippingOptions,
-  getPublicPaymentOptions
+  getPublicPaymentOptions,
+  upsertCheckoutCustomer
 };
