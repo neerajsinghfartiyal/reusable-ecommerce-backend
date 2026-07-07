@@ -641,6 +641,7 @@ const buildInstructionsRows = () => [
   ["13. Workflow: upload file → preview with column mapping → review validation → commit."],
   ["14. CSV and XLSX templates are generated from this schema; download either format before filling data."],
   ["15. Each import run is recorded in import history; failed rows can be downloaded as an error CSV."],
+  ["16. Variant import into Product.variants[] is planned for a later phase; imported variable products still use variations[]."],
   [""],
   ["Required summary by product_type"],
   ["simple", "product_type, product_name, sku, price, category (validation-required)"],

@@ -9,7 +9,9 @@
     "seed:admin": "node scripts/seedAdmin.js",
     "seed:store": "node scripts/seedStoreSettings.js",
     "generate:import-template-xlsx": "node scripts/generateProductImportTemplateXlsx.js",
-    "fix:category-indexes": "node scripts/fixCategoryIndexes.js"
+    "fix:category-indexes": "node scripts/fixCategoryIndexes.js",
+    "smoke:variants": "node scripts/smokeProductVariants.js",
+    "smoke:variant-e2e": "node scripts/smokeVariantE2E.js"
   },
   "keywords": [],
   "author": "",

@@ -7,15 +7,34 @@ const orderItemSchema = new mongoose.Schema(
       ref: "Product",
       required: true
     },
+    variantId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null
+    },
     productName: {
       type: String,
       required: true,
       trim: true
     },
+    variantTitle: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    variantOptions: {
+      type: Map,
+      of: String,
+      default: {}
+    },
     sku: {
       type: String,
       required: true,
       trim: true
+    },
+    image: {
+      type: String,
+      trim: true,
+      default: ""
     },
     quantity: {
       type: Number,
@@ -27,10 +46,20 @@ const orderItemSchema = new mongoose.Schema(
       required: true,
       min: 0
     },
+    unitPrice: {
+      type: Number,
+      min: 0,
+      default: 0
+    },
     total: {
       type: Number,
       required: true,
       min: 0
+    },
+    lineTotal: {
+      type: Number,
+      min: 0,
+      default: 0
     }
   },
   {

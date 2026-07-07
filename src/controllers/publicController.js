@@ -10,6 +10,7 @@ const {
   getCategoryDescendantIds,
   getCategoryPath,
 } = require("../services/categoryService");
+const { mapProductForPublicResponse } = require("../services/productVariantService");
 
 const getPublicProducts = async (req, res) => {
   try {
@@ -65,7 +66,7 @@ const getPublicProducts = async (req, res) => {
     const totalProducts = await Product.countDocuments(query);
 
     return sendResponse(res, 200, true, "Public products fetched successfully", {
-      products,
+      products: products.map((product) => mapProductForPublicResponse(product)),
       pagination: {
         totalProducts,
         currentPage,
@@ -93,7 +94,7 @@ const getPublicProductBySlug = async (req, res) => {
       return sendResponse(res, 404, false, "Product not found");
     }
 
-    const productObject = product.toObject();
+    const productObject = mapProductForPublicResponse(product);
     if (productObject.category?._id) {
       productObject.categoryPath = await getCategoryPath(productObject.category._id);
       productObject.categoryBreadcrumb = productObject.categoryPath.map((item) => item.name).join(" > ");

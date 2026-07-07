@@ -31,6 +31,14 @@ const {
   listCheckoutPaymentOptions,
   quotePaymentMethod
 } = require("../services/paymentMethodService");
+const {
+  validateVariantSelection,
+  buildOrderItemSnapshot,
+} = require("../services/productVariantService");
+const {
+  deductPurchasableStock,
+  restorePurchasableStock,
+} = require("../services/productInventoryService");
 
 const FINAL_ORDER_STATUSES = ["cancelled", "delivered"];
 
@@ -243,30 +251,42 @@ const createOrder = async (req, res) => {
         return sendResponse(res, 400, false, "Quantity must be greater than 0");
       }
 
-      if (shouldReduceStock && quantity > product.quantity) {
+      const selection = validateVariantSelection(product, item.variantId || null);
+      if (!selection.valid) {
+        return sendResponse(res, 400, false, selection.error);
+      }
+
+      if (shouldReduceStock && quantity > selection.purchasable.stockQuantity) {
         return sendResponse(
           res,
           400,
           false,
-          `Insufficient stock for ${product.name}. Available stock is ${product.quantity}`
+          `Insufficient stock for ${product.name}. Available stock is ${selection.purchasable.stockQuantity}`,
         );
       }
 
-      const price = product.salePrice || product.price;
-      const itemTotal = price * quantity;
+      const purchasable = selection.purchasable;
+      const itemTotal = purchasable.price * quantity;
 
-      orderItems.push({
-        product: product._id,
-        productName: product.name,
-        sku: product.sku,
-        quantity,
-        price,
-        total: itemTotal
-      });
+      orderItems.push(
+        buildOrderItemSnapshot({
+          product: product._id,
+          variantId: purchasable.variantId || null,
+          productName: product.name,
+          variantTitle: purchasable.variantTitle || "",
+          variantOptions: purchasable.selectedOptions || {},
+          sku: purchasable.sku || product.sku,
+          featuredImage: purchasable.image || product.featuredImage || "",
+          quantity,
+          price: purchasable.price,
+          total: itemTotal,
+        }),
+      );
 
       stockUpdates.push({
         product,
-        quantity
+        variantId: purchasable.variantId || null,
+        quantity,
       });
 
       subtotal += itemTotal;
@@ -424,26 +444,14 @@ const createOrder = async (req, res) => {
 
     if (shouldReduceStock) {
       for (const stockItem of stockUpdates) {
-        const updatedProduct = await Product.findOneAndUpdate(
-          {
-            _id: stockItem.product._id,
-            quantity: { $gte: stockItem.quantity }
-          },
-          {
-            $inc: { quantity: -stockItem.quantity }
-          },
-          {
-            new: true
-          }
+        const deduction = await deductPurchasableStock(
+          stockItem.product,
+          stockItem.variantId,
+          stockItem.quantity,
         );
 
-        if (!updatedProduct) {
-          return sendResponse(
-            res,
-            400,
-            false,
-            `Insufficient stock for ${stockItem.product.name}. Available stock may have changed. Please refresh and try again.`
-          );
+        if (!deduction.success) {
+          return sendResponse(res, 400, false, deduction.error);
         }
       }
     }
@@ -661,9 +669,7 @@ const updateOrderStatus = async (req, res) => {
 
     if (willBeCancelled && !wasCancelled) {
       for (const item of order.items) {
-        await Product.findByIdAndUpdate(item.product, {
-          $inc: { quantity: item.quantity }
-        });
+        await restorePurchasableStock(item.product, item.variantId || null, item.quantity);
       }
     }
 

@@ -96,6 +96,57 @@ const productSchema = new mongoose.Schema(
         }
       }
     ],
+    hasVariants: {
+      type: Boolean,
+      default: false
+    },
+    variants: [
+      {
+        sku: {
+          type: String,
+          trim: true,
+          default: ""
+        },
+        title: {
+          type: String,
+          trim: true,
+          default: ""
+        },
+        options: {
+          type: Map,
+          of: String,
+          default: {}
+        },
+        price: {
+          type: Number,
+          default: 0,
+          min: 0
+        },
+        compareAtPrice: {
+          type: Number,
+          default: null,
+          min: 0
+        },
+        stockQuantity: {
+          type: Number,
+          default: 0,
+          min: 0
+        },
+        image: {
+          type: String,
+          trim: true,
+          default: ""
+        },
+        isActive: {
+          type: Boolean,
+          default: true
+        },
+        sortOrder: {
+          type: Number,
+          default: 0
+        }
+      }
+    ],
     variations: [
       {
         sku: {

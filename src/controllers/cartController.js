@@ -26,6 +26,25 @@ const {
   listCheckoutPaymentOptions,
   quotePaymentMethod
 } = require("../services/paymentMethodService");
+const {
+  validateVariantSelection,
+  cartLinesMatch,
+  buildCartItemSnapshot,
+  buildOrderItemSnapshot,
+} = require("../services/productVariantService");
+const { deductPurchasableStock } = require("../services/productInventoryService");
+const { mapCartForResponse } = require("../utils/cartResponseMapper");
+
+const getVariantIdFromRequest = (req) => {
+  const value =
+    req.body?.variantId !== undefined ? req.body.variantId : req.query?.variantId;
+
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  return value;
+};
 
 const getSessionIdFromRequest = (req) => {
   const sessionId = req.params.sessionId || req.body.sessionId;
@@ -46,11 +65,16 @@ const getOrCreateActiveCart = async (sessionId) => {
 };
 
 const populateCartById = async (cartId) => {
-  return Cart.findById(cartId)
-    .populate("items.product", "name slug featuredImage price salePrice quantity")
+  const cart = await Cart.findById(cartId)
+    .populate(
+      "items.product",
+      "name slug featuredImage price salePrice quantity hasVariants variants variations",
+    )
     .populate("coupon", "code discountType discountValue")
     .populate("shippingMethod", "name code displayName type")
     .populate("paymentMethodRef", "name code displayName type provider");
+
+  return mapCartForResponse(cart);
 };
 
 const calculateCartTotals = (cart) => {
@@ -157,6 +181,7 @@ const addToCart = async (req, res) => {
   try {
     const sessionId = getSessionIdFromRequest(req);
     const { productId, quantity } = req.body;
+    const variantId = getVariantIdFromRequest(req);
 
     if (!sessionId) {
       return sendResponse(res, 400, false, "Session ID is required");
@@ -182,41 +207,32 @@ const addToCart = async (req, res) => {
       return sendResponse(res, 400, false, "Only published products can be added to cart");
     }
 
+    const selection = validateVariantSelection(product, variantId);
+    if (!selection.valid) {
+      return sendResponse(res, 400, false, selection.error);
+    }
+
+    const purchasable = selection.purchasable;
     const cart = await getOrCreateActiveCart(sessionId);
-    const existingItem = cart.items.find(
-      (item) => String(item.product) === String(product._id)
-    );
+    const existingItem = cart.items.find((item) => cartLinesMatch(item, product._id, variantId));
 
     const newQuantity = existingItem ? existingItem.quantity + requestedQuantity : requestedQuantity;
 
-    if (newQuantity > product.quantity) {
+    if (newQuantity > purchasable.stockQuantity) {
       return sendResponse(
         res,
         400,
         false,
-        `Insufficient stock for ${product.name}. Available stock is ${product.quantity}`
+        `Insufficient stock for ${product.name}. Available stock is ${purchasable.stockQuantity}`,
       );
     }
 
-    const finalPrice = product.salePrice || product.price;
+    const snapshot = buildCartItemSnapshot(product, purchasable, newQuantity);
 
     if (existingItem) {
-      existingItem.quantity = newQuantity;
-      existingItem.price = finalPrice;
-      existingItem.productName = product.name;
-      existingItem.sku = product.sku;
-      existingItem.featuredImage = product.featuredImage || "";
-      existingItem.total = finalPrice * newQuantity;
+      Object.assign(existingItem, snapshot);
     } else {
-      cart.items.push({
-        product: product._id,
-        productName: product.name,
-        sku: product.sku,
-        price: finalPrice,
-        quantity: requestedQuantity,
-        featuredImage: product.featuredImage || "",
-        total: finalPrice * requestedQuantity
-      });
+      cart.items.push(snapshot);
     }
 
     await refreshCartTotals(cart);
@@ -235,6 +251,7 @@ const updateCartItem = async (req, res) => {
     const sessionId = getSessionIdFromRequest(req);
     const { productId } = req.params;
     const { quantity } = req.body;
+    const variantId = getVariantIdFromRequest(req);
 
     if (!sessionId) {
       return sendResponse(res, 400, false, "Session ID is required");
@@ -246,9 +263,7 @@ const updateCartItem = async (req, res) => {
 
     const updatedQuantity = Number(quantity);
     const cart = await getOrCreateActiveCart(sessionId);
-    const itemIndex = cart.items.findIndex(
-      (item) => String(item.product) === String(productId)
-    );
+    const itemIndex = cart.items.findIndex((item) => cartLinesMatch(item, productId, variantId));
 
     if (itemIndex === -1) {
       return sendResponse(res, 404, false, "Cart item not found");
@@ -269,24 +284,24 @@ const updateCartItem = async (req, res) => {
       return sendResponse(res, 404, false, "Product not found");
     }
 
-    if (updatedQuantity > product.quantity) {
+    const selection = validateVariantSelection(product, variantId || cart.items[itemIndex].variantId);
+    if (!selection.valid) {
+      return sendResponse(res, 400, false, selection.error);
+    }
+
+    const purchasable = selection.purchasable;
+
+    if (updatedQuantity > purchasable.stockQuantity) {
       return sendResponse(
         res,
         400,
         false,
-        `Insufficient stock for ${product.name}. Available stock is ${product.quantity}`
+        `Insufficient stock for ${product.name}. Available stock is ${purchasable.stockQuantity}`,
       );
     }
 
-    const item = cart.items[itemIndex];
-    const finalPrice = product.salePrice || product.price;
-
-    item.quantity = updatedQuantity;
-    item.price = finalPrice;
-    item.productName = product.name;
-    item.sku = product.sku;
-    item.featuredImage = product.featuredImage || "";
-    item.total = finalPrice * updatedQuantity;
+    const snapshot = buildCartItemSnapshot(product, purchasable, updatedQuantity);
+    Object.assign(cart.items[itemIndex], snapshot);
 
     await refreshCartTotals(cart);
     await cart.save();
@@ -303,13 +318,26 @@ const removeCartItem = async (req, res) => {
   try {
     const sessionId = getSessionIdFromRequest(req);
     const { productId } = req.params;
+    const variantId = getVariantIdFromRequest(req);
 
     if (!sessionId) {
       return sendResponse(res, 400, false, "Session ID is required");
     }
 
     const cart = await getOrCreateActiveCart(sessionId);
-    cart.items = cart.items.filter((item) => String(item.product) !== String(productId));
+
+    if (variantId) {
+      cart.items = cart.items.filter((item) => !cartLinesMatch(item, productId, variantId));
+    } else {
+      cart.items = cart.items.filter((item) => {
+        if (String(item.product) !== String(productId)) return true;
+        return (
+          item.variantId !== undefined &&
+          item.variantId !== null &&
+          String(item.variantId) !== ""
+        );
+      });
+    }
 
     await refreshCartTotals(cart);
     await cart.save();
@@ -478,18 +506,24 @@ const checkoutCart = async (req, res) => {
         return sendResponse(res, 404, false, `Product not found for SKU ${item.sku}`);
       }
 
-      if (item.quantity > product.quantity) {
+      const selection = validateVariantSelection(product, item.variantId || null);
+      if (!selection.valid) {
+        return sendResponse(res, 400, false, selection.error);
+      }
+
+      if (item.quantity > selection.purchasable.stockQuantity) {
         return sendResponse(
           res,
           400,
           false,
-          `Insufficient stock for ${product.name}. Available stock is ${product.quantity}`
+          `Insufficient stock for ${product.name}. Available stock is ${selection.purchasable.stockQuantity}`,
         );
       }
 
       stockUpdates.push({
         product,
-        quantity: item.quantity
+        variantId: item.variantId || null,
+        quantity: item.quantity,
       });
     }
 
@@ -584,14 +618,7 @@ const checkoutCart = async (req, res) => {
 
     const order = await Order.create({
       customer,
-      items: cart.items.map((item) => ({
-        product: item.product,
-        productName: item.productName,
-        sku: item.sku,
-        quantity: item.quantity,
-        price: item.price,
-        total: item.total
-      })),
+      items: cart.items.map((item) => buildOrderItemSnapshot(item)),
       subtotal: cart.subtotal,
       taxAmount: cart.taxAmount,
       shippingAmount: finalShippingAmount,
@@ -615,26 +642,14 @@ const checkoutCart = async (req, res) => {
     });
 
     for (const stockItem of stockUpdates) {
-      const updatedProduct = await Product.findOneAndUpdate(
-        {
-          _id: stockItem.product._id,
-          quantity: { $gte: stockItem.quantity }
-        },
-        {
-          $inc: { quantity: -stockItem.quantity }
-        },
-        {
-          new: true
-        }
+      const deduction = await deductPurchasableStock(
+        stockItem.product,
+        stockItem.variantId,
+        stockItem.quantity,
       );
 
-      if (!updatedProduct) {
-        return sendResponse(
-          res,
-          400,
-          false,
-          `Insufficient stock for ${stockItem.product.name}. Available stock may have changed. Please refresh and try again.`
-        );
+      if (!deduction.success) {
+        return sendResponse(res, 400, false, deduction.error);
       }
     }
 

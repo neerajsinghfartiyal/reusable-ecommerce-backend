@@ -2,6 +2,12 @@ const Product = require("../models/Product");
 const sendResponse = require("../utils/response");
 const { logActivity } = require("../utils/activityLogger");
 const { resolveProductMediaIdFields } = require("../utils/productMediaFields");
+const {
+  normalizeProductVariants,
+  validateProductVariantsPayload,
+  inferHasVariants,
+  mapProductForAdminResponse,
+} = require("../services/productVariantService");
 
 const parseArrayField = (value) => {
   if (Array.isArray(value)) {
@@ -111,6 +117,8 @@ const createProduct = async (req, res) => {
       unitType,
       attributes,
       variations,
+      variants,
+      hasVariants,
       shortDescription,
       description,
       featuredImage,
@@ -137,6 +145,15 @@ const createProduct = async (req, res) => {
 
     if (mediaIdFields.error) {
       return sendResponse(res, 400, false, mediaIdFields.error);
+    }
+
+    const normalizedVariants =
+      variants !== undefined ? normalizeProductVariants(variants) : null;
+    if (normalizedVariants) {
+      const variantErrors = validateProductVariantsPayload(normalizedVariants);
+      if (variantErrors.length) {
+        return sendResponse(res, 400, false, variantErrors.join("; "));
+      }
     }
 
     const createPayload = {
@@ -166,6 +183,13 @@ const createProduct = async (req, res) => {
       createPayload.galleryMediaIds = mediaIdFields.galleryMediaIds;
     }
 
+    if (normalizedVariants) {
+      createPayload.variants = normalizedVariants;
+      createPayload.hasVariants = inferHasVariants(normalizedVariants, hasVariants);
+    } else if (hasVariants !== undefined) {
+      createPayload.hasVariants = Boolean(hasVariants);
+    }
+
     const product = await Product.create(createPayload);
 
     await logActivity({
@@ -179,7 +203,13 @@ const createProduct = async (req, res) => {
       userAgent: req.get("User-Agent")
     });
 
-    return sendResponse(res, 201, true, "Product created successfully", product);
+    return sendResponse(
+      res,
+      201,
+      true,
+      "Product created successfully",
+      mapProductForAdminResponse(product),
+    );
   } catch (error) {
     return sendResponse(res, 500, false, error.message);
   }
@@ -241,7 +271,7 @@ const getAllProducts = async (req, res) => {
     const totalPages = Math.ceil(totalProducts / pageLimit);
 
     return sendResponse(res, 200, true, "Product list fetched successfully", {
-      products,
+      products: products.map((product) => mapProductForAdminResponse(product)),
       pagination: {
         totalProducts,
         currentPage,
@@ -267,7 +297,13 @@ const getProductById = async (req, res) => {
       return sendResponse(res, 404, false, "Product not found");
     }
 
-    return sendResponse(res, 200, true, "Product fetched successfully", product);
+    return sendResponse(
+      res,
+      200,
+      true,
+      "Product fetched successfully",
+      mapProductForAdminResponse(product),
+    );
   } catch (error) {
     return sendResponse(res, 500, false, error.message);
   }
@@ -292,6 +328,8 @@ const updateProduct = async (req, res) => {
       unitType,
       attributes,
       variations,
+      variants,
+      hasVariants,
       shortDescription,
       description,
       featuredImage,
@@ -321,6 +359,18 @@ const updateProduct = async (req, res) => {
     if (variations !== undefined) {
       product.variations = normalizeProductVariations(variations);
     }
+    if (variants !== undefined) {
+      const normalizedVariants = normalizeProductVariants(variants);
+      const variantErrors = validateProductVariantsPayload(normalizedVariants);
+      if (variantErrors.length) {
+        return sendResponse(res, 400, false, variantErrors.join("; "));
+      }
+
+      product.variants = normalizedVariants;
+      product.hasVariants = inferHasVariants(normalizedVariants, hasVariants);
+    } else if (hasVariants !== undefined) {
+      product.hasVariants = Boolean(hasVariants);
+    }
     if (shortDescription !== undefined) product.shortDescription = shortDescription;
     if (description !== undefined) product.description = description;
     if (featuredImage !== undefined) product.featuredImage = featuredImage || null;
@@ -346,7 +396,13 @@ const updateProduct = async (req, res) => {
 
     await product.save();
 
-    return sendResponse(res, 200, true, "Product updated successfully", product);
+    return sendResponse(
+      res,
+      200,
+      true,
+      "Product updated successfully",
+      mapProductForAdminResponse(product),
+    );
   } catch (error) {
     return sendResponse(res, 500, false, error.message);
   }

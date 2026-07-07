@@ -68,6 +68,7 @@ npm run dev             # nodemon, default port 5000
 | `npm run seed:store` | Seed demo store settings (VELMORA) if collection is empty |
 | `npm run fix:category-indexes` | Drop legacy global `name` index; ensure `{ parent, name }` unique |
 | `npm run generate:import-template-xlsx` | Write static XLSX to disk (runtime templates also available via API) |
+| `npm run smoke:variants` | Helper + optional DB smoke for product variants foundation |
 
 Verify app loads:
 
@@ -191,11 +192,21 @@ Hierarchical category master data.
 ### Products — `/api/products`, `/api/public/products`
 CRUD, bulk patch, public catalog with filters (category includes descendants).
 
+**Product variants (Phase 1 — backend foundation):**
+
+- Simple products (`hasVariants: false` or omitted) continue to use product-level `price`, `salePrice`, and `quantity`.
+- Variant products store purchasable options on `variants[]` (`sku`, `title`, `options`, `price`, `compareAtPrice`, `stockQuantity`, `image`, `isActive`, `sortOrder`).
+- Public product APIs expose `hasVariants` and **active** `variants` only. Admin APIs expose all variants.
+- Legacy import variable products still use `variations[]`; helpers resolve either `variants[]` or `variations[]` for purchase/stock.
+- Admin and storefront UIs for variant management/selection are planned for later phases.
+
 ### Product import — `/api/products/import/*`
-CSV/XLSX templates, preview, commit, history, error export.
+CSV/XLSX templates, preview, commit, history, error export. Imported rows still default to simple products; variable import continues to populate `variations[]`. Direct `variants[]` import is planned for a later phase.
 
 ### Cart & guest checkout — `/api/cart/:sessionId`
 Session-based cart (no auth). Guest customer upsert at `POST /api/public/customers/checkout`. Checkout at `POST /api/cart/:sessionId/checkout`.
+
+Cart items optionally store `variantId` plus variant title/options snapshots. Add variant products with `variantId` in the request body; simple products work unchanged without `variantId`. Same product + different variants create separate cart lines.
 
 ### Orders — `/api/orders`
 Order management, fulfillment, payment status, snapshots.
@@ -322,9 +333,9 @@ Authorization: Bearer <jwt>
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/` | Get or create cart |
-| POST | `/items` | Add item |
-| PUT | `/items/:productId` | Update quantity |
-| DELETE | `/items/:productId` | Remove item |
+| POST | `/items` | Add item (`productId`, `quantity`, optional `variantId`) |
+| PUT | `/items/:productId` | Update quantity (optional `variantId` in body or query) |
+| DELETE | `/items/:productId` | Remove item (optional `variantId` in body or query) |
 | GET | `/shipping-options` | Quote shipping |
 | PUT | `/shipping-method` | Select shipping |
 | GET | `/payment-options` | List payment options |
@@ -335,8 +346,9 @@ Authorization: Bearer <jwt>
 
 ## Known limitations
 
-- **No automated test suite** in this repository.
-- **Simple product stock** in cart checkout (`product.quantity`); variable/variation SKU stock is not fully handled.
+- **No automated test suite** in this repository (use `npm run smoke:variants` for variant foundation checks).
+- **Variant UI** is not implemented in admin or storefront yet — APIs accept/return variant data for future UI phases.
+- **Product import** does not populate `variants[]` yet; variable rows still map to legacy `variations[]`.
 - **Maintenance mode** field exists but is not enforced on public/cart routes yet.
 - **No payment gateway integration** — methods are configuration/selection only.
 - **Email** requires SMTP; otherwise notifications are skipped.
