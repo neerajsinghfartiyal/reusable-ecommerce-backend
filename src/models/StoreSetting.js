@@ -158,6 +158,16 @@ const storeSettingSchema = new mongoose.Schema(
       type: Boolean,
       default: false
     },
+    maintenanceTitle: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    maintenanceMessage: {
+      type: String,
+      trim: true,
+      default: ""
+    },
     updatedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Admin"

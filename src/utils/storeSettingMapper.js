@@ -1,6 +1,8 @@
 const {
   DEMO_STORE_NAME,
-  DEMO_STORE_TAGLINE
+  DEMO_STORE_TAGLINE,
+  DEFAULT_MAINTENANCE_TITLE,
+  DEFAULT_MAINTENANCE_MESSAGE
 } = require("../constants/storeDefaults");
 
 const normalizeText = (value) =>
@@ -124,6 +126,14 @@ const applyStoreSettingsUpdate = (settings, body = {}) => {
     settings.maintenanceMode = normalizeBoolean(body.maintenanceMode, settings.maintenanceMode);
   }
 
+  if (body.maintenanceTitle !== undefined) {
+    settings.maintenanceTitle = normalizeText(body.maintenanceTitle);
+  }
+
+  if (body.maintenanceMessage !== undefined) {
+    settings.maintenanceMessage = normalizeText(body.maintenanceMessage);
+  }
+
   if (settings.taxEnabled === false) {
     settings.taxPercentage = 0;
   }
@@ -202,6 +212,8 @@ const toPublicStoreSettings = (settings) => {
       freeShippingThreshold: 0,
       shippingCharge: 0,
       maintenanceMode: false,
+      maintenanceTitle: DEFAULT_MAINTENANCE_TITLE,
+      maintenanceMessage: DEFAULT_MAINTENANCE_MESSAGE,
       seo: {
         title: "",
         description: "",
@@ -231,7 +243,10 @@ const toPublicStoreSettings = (settings) => {
     shippingEnabled: response.shippingEnabled,
     freeShippingThreshold: response.freeShippingThreshold || 0,
     shippingCharge: response.freeShippingThreshold || 0,
-    maintenanceMode: response.maintenanceMode || false,
+    maintenanceMode: response.maintenanceMode === true,
+    maintenanceTitle: normalizeText(response.maintenanceTitle) || DEFAULT_MAINTENANCE_TITLE,
+    maintenanceMessage:
+      normalizeText(response.maintenanceMessage) || DEFAULT_MAINTENANCE_MESSAGE,
     seo: response.seo,
     social: response.social
   };
