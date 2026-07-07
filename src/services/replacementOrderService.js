@@ -2,6 +2,7 @@ const Order = require("../models/Order");
 const Product = require("../models/Product");
 const ReturnRequest = require("../models/ReturnRequest");
 const { buildInitialFulfillment } = require("../utils/orderFulfillment");
+const { initializeOrderLifecycle } = require("./orderLifecycleService");
 
 const REPLACEMENT_ELIGIBLE_STATUSES = ["approved", "received", "exchanged"];
 
@@ -140,6 +141,14 @@ const createReplacementOrderForReturn = async (returnRequestId, adminId) => {
     notes: `Replacement order for exchange request ${returnRequest._id}`,
     createdBy: adminId || null
   });
+
+  initializeOrderLifecycle(replacementOrder, {
+    actorType: "admin",
+    createdBy: adminId || null,
+    message: "Replacement order created",
+    metadata: { source: "replacement", returnRequestId: returnRequest._id },
+  });
+  await replacementOrder.save();
 
   returnRequest.replacementOrder = replacementOrder._id;
   returnRequest.updatedBy = adminId || null;

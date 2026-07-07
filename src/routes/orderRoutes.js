@@ -7,6 +7,9 @@ const {
   updateOrderStatus,
   updatePaymentStatus,
   updateOrderFulfillment,
+  updateOrderTracking,
+  addOrderNote,
+  processOrderRefund,
   deleteOrder
 } = require("../controllers/orderController");
 
@@ -20,6 +23,9 @@ router.get("/:id", getOrderById);
 router.put("/:id/status", updateOrderStatus);
 router.put("/:id/payment-status", updatePaymentStatus);
 router.put("/:id/fulfillment", updateOrderFulfillment);
+router.put("/:id/tracking", updateOrderTracking);
+router.post("/:id/notes", addOrderNote);
+router.post("/:id/refund", processOrderRefund);
 router.delete("/:id", deleteOrder);
 
 module.exports = router;

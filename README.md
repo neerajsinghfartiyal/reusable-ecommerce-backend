@@ -69,6 +69,8 @@ npm run dev             # nodemon, default port 5000
 | `npm run fix:category-indexes` | Drop legacy global `name` index; ensure `{ parent, name }` unique |
 | `npm run generate:import-template-xlsx` | Write static XLSX to disk (runtime templates also available via API) |
 | `npm run smoke:variants` | Helper + optional DB smoke for product variants foundation |
+| `npm run smoke:variant-e2e` | HTTP E2E smoke for variant cart/checkout/stock |
+| `npm run smoke:orders` | HTTP smoke for order lifecycle, timeline, tracking, notes, refunds |
 
 Verify app loads:
 
@@ -209,7 +211,55 @@ Session-based cart (no auth). Guest customer upsert at `POST /api/public/custome
 Cart items optionally store `variantId` plus variant title/options snapshots. Add variant products with `variantId` in the request body; simple products work unchanged without `variantId`. Same product + different variants create separate cart lines.
 
 ### Orders — `/api/orders`
-Order management, fulfillment, payment status, snapshots.
+Order management with lifecycle statuses, timeline/history, fulfillment tracking, payment status, admin notes, and refund groundwork.
+
+**Order statuses (`orderStatus`):** `pending`, `confirmed`, `processing`, `packed`, `shipped`, `out_for_delivery`, `delivered`, `cancelled`, `return_requested`, `returned`, `refunded`.
+
+Legacy orders with older statuses (`pending`, `processing`, `shipped`, `delivered`, `cancelled`) continue to load and transition safely.
+
+**Payment statuses (`paymentStatus`):** `pending`, `paid`, `failed`, `refunded`, `partially_refunded`, `cod_pending`.
+
+**Status transition rules (normal flow):**
+
+| From | Allowed next |
+|------|----------------|
+| `pending` | `confirmed`, `cancelled` |
+| `confirmed` | `processing`, `cancelled` |
+| `processing` | `packed`, `cancelled` |
+| `packed` | `shipped`, `cancelled` |
+| `shipped` | `out_for_delivery`, `delivered` |
+| `out_for_delivery` | `delivered` |
+| `delivered` | `return_requested` |
+| `return_requested` | `returned`, `refunded` |
+| `returned` | `refunded` |
+| `cancelled`, `refunded` | terminal |
+
+Admins may override with `allowAdminOverride: true` and a `reason` on `PUT /api/orders/:id/status`. Adding tracking via `PUT /api/orders/:id/tracking` can move pre-shipment orders to `shipped` when a tracking number is provided.
+
+**Timeline:** `orderTimeline[]` records status, label, message, note, actor (`system` / `admin` / `customer`), and optional metadata. Created on checkout/admin order create; appended on status, payment, tracking, and refund updates. Orders without stored timeline get a mapper fallback from existing fields.
+
+**Tracking fields:** `fulfillment.trackingNumber`, `fulfillment.trackingUrl`, `fulfillment.courierName` (alias of `carrier`), `shippedAt`, `deliveredAt`.
+
+**Admin notes:** `POST /api/orders/:id/notes` appends private `adminNotes[]` (included in admin detail only).
+
+**Refund groundwork:** `POST /api/orders/:id/refund` records `refundAmount`, `refundReference`, `refundedAt`, and payment status — no live payment gateway integration.
+
+**Stock restoration:** Cancelling a pre-shipment order restores simple/variant stock once (`inventoryRestored` flag prevents double restoration). Delivered/returned orders do not auto-restore inventory.
+
+**Key admin endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/orders` | List with filters (`orderStatus`, `paymentStatus`, `search`, `startDate`, `endDate`, …) |
+| GET | `/api/orders/:id` | Full detail with timeline, notes, allowed next statuses |
+| PUT | `/api/orders/:id/status` | Change `orderStatus` (+ optional `reason`, `note`) |
+| PUT | `/api/orders/:id/tracking` | Update courier/tracking; optional auto-ship |
+| PUT | `/api/orders/:id/payment-status` | Update payment status/reference |
+| PUT | `/api/orders/:id/fulfillment` | Legacy fulfillment workflow (still supported) |
+| POST | `/api/orders/:id/notes` | Add internal admin note |
+| POST | `/api/orders/:id/refund` | Record refund groundwork |
+
+Checkout responses return a **customer-safe** order payload (timeline without admin notes; tracking shown when shipped/delivered).
 
 ### Payment methods — `/api/payment-methods`
 Active methods quoted at checkout when required.
@@ -346,7 +396,7 @@ Authorization: Bearer <jwt>
 
 ## Known limitations
 
-- **No automated test suite** in this repository (use `npm run smoke:variants` for variant foundation checks).
+- **No automated test suite** in this repository (use `npm run smoke:variants`, `npm run smoke:variant-e2e`, and `npm run smoke:orders` for foundation checks).
 - **Variant UI** is not implemented in admin or storefront yet — APIs accept/return variant data for future UI phases.
 - **Product import** does not populate `variants[]` yet; variable rows still map to legacy `variations[]`.
 - **Maintenance mode** field exists but is not enforced on public/cart routes yet.

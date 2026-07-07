@@ -218,6 +218,11 @@ const fulfillmentSchema = new mongoose.Schema(
       trim: true,
       default: ""
     },
+    courierName: {
+      type: String,
+      trim: true,
+      default: ""
+    },
     trackingNumber: {
       type: String,
       trim: true,
@@ -240,6 +245,78 @@ const fulfillmentSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: ""
+    }
+  },
+  {
+    _id: false
+  }
+);
+
+const orderTimelineSchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    label: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    message: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    note: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Admin",
+      default: null
+    },
+    actorType: {
+      type: String,
+      enum: ["system", "admin", "customer"],
+      default: "system"
+    },
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({})
+    }
+  },
+  {
+    _id: false
+  }
+);
+
+const adminNoteSchema = new mongoose.Schema(
+  {
+    note: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Admin",
+      default: null
+    },
+    isPrivate: {
+      type: Boolean,
+      default: true
     }
   },
   {
@@ -361,6 +438,34 @@ const orderSchema = new mongoose.Schema(
       type: Date,
       default: null
     },
+    refundAmount: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    refundReference: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    cancelledAt: {
+      type: Date,
+      default: null
+    },
+    cancellationReason: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    returnReason: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    inventoryRestored: {
+      type: Boolean,
+      default: false
+    },
     shippingAddressSnapshot: {
       type: addressSnapshotSchema,
       default: () => ({})
@@ -371,8 +476,28 @@ const orderSchema = new mongoose.Schema(
     },
     orderStatus: {
       type: String,
-      enum: ["pending", "processing", "shipped", "delivered", "cancelled"],
+      enum: [
+        "pending",
+        "confirmed",
+        "processing",
+        "packed",
+        "shipped",
+        "out_for_delivery",
+        "delivered",
+        "cancelled",
+        "return_requested",
+        "returned",
+        "refunded"
+      ],
       default: "pending"
+    },
+    orderTimeline: {
+      type: [orderTimelineSchema],
+      default: () => []
+    },
+    adminNotes: {
+      type: [adminNoteSchema],
+      default: () => []
     },
     orderKind: {
       type: String,

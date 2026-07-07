@@ -14,6 +14,8 @@ const {
   buildAddressSnapshot,
   buildInitialFulfillment
 } = require("../utils/orderFulfillment");
+const { initializeOrderLifecycle } = require("../services/orderLifecycleService");
+const { mapOrderForPublic } = require("../utils/orderResponseMapper");
 const {
   buildLocationFromCustomer,
   getStoreShippingSettings,
@@ -641,6 +643,13 @@ const checkoutCart = async (req, res) => {
       createdBy: null
     });
 
+    initializeOrderLifecycle(order, {
+      actorType: "system",
+      message: "Order placed via checkout",
+      metadata: { source: "checkout" },
+    });
+    await order.save();
+
     for (const stockItem of stockUpdates) {
       const deduction = await deductPurchasableStock(
         stockItem.product,
@@ -716,7 +725,7 @@ const checkoutCart = async (req, res) => {
     }
 
     return sendResponse(res, 201, true, "Checkout completed successfully", {
-      order: createdOrder,
+      order: mapOrderForPublic(createdOrder),
       cart: convertedCart
     });
   } catch (error) {

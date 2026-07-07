@@ -21,6 +21,17 @@ const {
   applyOrderStatusForFulfillment
 } = require("../utils/orderFulfillment");
 const {
+  applyOrderStatusChange,
+  applyTrackingUpdate,
+  addAdminNote,
+  applyRefundUpdate,
+  initializeOrderLifecycle,
+  appendTimelineEvent,
+  buildTimelineEntry,
+  getStatusLabel,
+} = require("../services/orderLifecycleService");
+const { mapOrderForAdmin, mapOrderForPublic } = require("../utils/orderResponseMapper");
+const {
   buildLocationFromCustomer,
   getStoreShippingSettings,
   quoteShippingMethod,
@@ -37,10 +48,10 @@ const {
 } = require("../services/productVariantService");
 const {
   deductPurchasableStock,
-  restorePurchasableStock,
 } = require("../services/productInventoryService");
 
-const FINAL_ORDER_STATUSES = ["cancelled", "delivered"];
+
+const mapOrdersForAdmin = (orders = []) => orders.map((order) => mapOrderForAdmin(order));
 
 const buildFulfillmentStatusFilter = (status) => {
   if (!status) {
@@ -58,9 +69,10 @@ const buildFulfillmentStatusFilter = (status) => {
   }
 
   const legacyOrderStatuses = {
-    unfulfilled: ["pending", "cancelled"],
-    processing: ["processing"],
-    shipped: ["shipped"],
+    unfulfilled: ["pending", "confirmed", "cancelled"],
+    processing: ["processing", "confirmed"],
+    packed: ["packed", "processing"],
+    shipped: ["shipped", "out_for_delivery"],
     delivered: ["delivered"]
   };
 
@@ -437,6 +449,14 @@ const createOrder = async (req, res) => {
       createdBy: req.admin._id
     });
 
+    initializeOrderLifecycle(order, {
+      actorType: "admin",
+      createdBy: req.admin._id,
+      message: "Order created by admin",
+      metadata: { source: "admin" },
+    });
+    await order.save();
+
     if (appliedCoupon) {
       appliedCoupon.usedCount += 1;
       await appliedCoupon.save();
@@ -480,7 +500,7 @@ const createOrder = async (req, res) => {
       userAgent: req.get("User-Agent")
     });
 
-    return sendResponse(res, 201, true, "Order created successfully", populatedOrder);
+    return sendResponse(res, 201, true, "Order created successfully", mapOrderForAdmin(populatedOrder));
   } catch (error) {
     return sendResponse(res, 500, false, error.message);
   }
@@ -495,6 +515,8 @@ const getAllOrders = async (req, res) => {
       orderStatus,
       fulfillmentStatus,
       hasTracking,
+      startDate,
+      endDate,
       page = 1,
       limit = 10,
       sortBy = "createdAt",
@@ -513,6 +535,18 @@ const getAllOrders = async (req, res) => {
 
     if (orderStatus) {
       query.orderStatus = orderStatus;
+    }
+
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) {
+        query.createdAt.$gte = new Date(startDate);
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        query.createdAt.$lte = end;
+      }
     }
 
     const fulfillmentFilter = buildFulfillmentStatusFilter(fulfillmentStatus);
@@ -579,7 +613,7 @@ const getAllOrders = async (req, res) => {
     const totalOrders = await Order.countDocuments(query);
 
     return sendResponse(res, 200, true, "Order list fetched successfully", {
-      orders,
+      orders: mapOrdersForAdmin(orders),
       pagination: {
         totalOrders,
         currentPage,
@@ -606,7 +640,7 @@ const getOrderById = async (req, res) => {
       return sendResponse(res, 404, false, "Order not found");
     }
 
-    return sendResponse(res, 200, true, "Order fetched successfully", order);
+    return sendResponse(res, 200, true, "Order fetched successfully", mapOrderForAdmin(order));
   } catch (error) {
     return sendResponse(res, 500, false, error.message);
   }
@@ -614,7 +648,7 @@ const getOrderById = async (req, res) => {
 
 const updateOrderStatus = async (req, res) => {
   try {
-    const { paymentStatus, orderStatus, notes } = req.body;
+    const { paymentStatus, orderStatus, notes, reason, allowAdminOverride } = req.body;
 
     const order = await Order.findById(req.params.id);
 
@@ -622,66 +656,53 @@ const updateOrderStatus = async (req, res) => {
       return sendResponse(res, 404, false, "Order not found");
     }
 
-    const isOrderStatusChangeRequested =
-      orderStatus !== undefined && orderStatus !== order.orderStatus;
-    const fulfillment = getFulfillmentSnapshot(order);
+    if (paymentStatus) {
+      if (!PAYMENT_STATUS_OPTIONS.includes(paymentStatus)) {
+        return sendResponse(res, 400, false, "Invalid payment status");
+      }
 
-    if (paymentStatus && !PAYMENT_STATUS_OPTIONS.includes(paymentStatus)) {
-      return sendResponse(res, 400, false, "Invalid payment status");
-    }
+      order.paymentStatus = paymentStatus;
 
-    if (orderStatus && !ORDER_STATUS_OPTIONS.includes(orderStatus)) {
-      return sendResponse(res, 400, false, "Invalid order status");
-    }
+      if (paymentStatus === "paid" && !order.paidAt) {
+        order.paidAt = new Date();
+      }
 
-    if (isOrderStatusChangeRequested && FINAL_ORDER_STATUSES.includes(order.orderStatus)) {
-      return sendResponse(
-        res,
-        400,
-        false,
-        `Order status is final (${order.orderStatus}) and cannot be changed`
+      if (["refunded", "partially_refunded"].includes(paymentStatus)) {
+        order.refundedAt = order.refundedAt || new Date();
+      }
+
+      appendTimelineEvent(
+        order,
+        buildTimelineEntry({
+          status: order.orderStatus,
+          label: "Payment updated",
+          message: `Payment status changed to ${paymentStatus.replace(/_/g, " ")}`,
+          note: notes || "",
+          createdBy: req.admin?._id || null,
+          actorType: "admin",
+          metadata: { paymentStatus },
+        }),
       );
     }
 
-    if (
-      isOrderStatusChangeRequested &&
-      ["shipped", "delivered"].includes(orderStatus)
-    ) {
-      return sendResponse(
-        res,
-        400,
-        false,
-        "Use the fulfillment workflow to mark orders as shipped or delivered."
-      );
-    }
+    if (orderStatus !== undefined && orderStatus !== order.orderStatus) {
+      const result = await applyOrderStatusChange(order, orderStatus, {
+        createdBy: req.admin?._id || null,
+        actorType: "admin",
+        note: notes,
+        reason,
+        allowAdminOverride: Boolean(allowAdminOverride),
+        message: reason
+          ? `Order status changed to ${getStatusLabel(orderStatus)}`
+          : undefined,
+      });
 
-    const wasCancelled = order.orderStatus === "cancelled";
-    const willBeCancelled = orderStatus === "cancelled";
-
-    if (willBeCancelled && ["shipped", "delivered", "returned"].includes(fulfillment.status)) {
-      return sendResponse(
-        res,
-        400,
-        false,
-        "Shipped or delivered orders cannot be cancelled. Use fulfillment and returns workflows instead."
-      );
-    }
-
-    if (willBeCancelled && !wasCancelled) {
-      for (const item of order.items) {
-        await restorePurchasableStock(item.product, item.variantId || null, item.quantity);
+      if (!result.success) {
+        return sendResponse(res, 400, false, result.error);
       }
     }
 
-    if (paymentStatus) {
-      order.paymentStatus = paymentStatus;
-    }
-
-    if (orderStatus) {
-      order.orderStatus = orderStatus;
-    }
-
-    if (notes !== undefined) {
+    if (notes !== undefined && orderStatus === undefined) {
       order.notes = notes;
     }
 
@@ -716,7 +737,7 @@ const updateOrderStatus = async (req, res) => {
       }
     }
 
-    return sendResponse(res, 200, true, "Order updated successfully", updatedOrder);
+    return sendResponse(res, 200, true, "Order updated successfully", mapOrderForAdmin(updatedOrder));
   } catch (error) {
     return sendResponse(res, 500, false, error.message);
   }
@@ -785,6 +806,22 @@ const updatePaymentStatus = async (req, res) => {
       order.refundedAt = new Date();
     }
 
+    appendTimelineEvent(
+      order,
+      buildTimelineEntry({
+        status: order.orderStatus,
+        label: "Payment updated",
+        message: `Payment status changed to ${paymentStatus.replace(/_/g, " ")}`,
+        note: notes || paymentReference || "",
+        createdBy: req.admin?._id || null,
+        actorType: "admin",
+        metadata: {
+          paymentStatus,
+          paymentReference: order.paymentReference,
+        },
+      }),
+    );
+
     await order.save();
 
     await logActivity({
@@ -822,7 +859,7 @@ const updatePaymentStatus = async (req, res) => {
       200,
       true,
       "Order payment status updated successfully",
-      updatedOrder
+      mapOrderForAdmin(updatedOrder)
     );
   } catch (error) {
     return sendResponse(res, 500, false, error.message);
@@ -923,6 +960,29 @@ const updateOrderFulfillment = async (req, res) => {
     order.fulfillment = nextFulfillment;
     applyOrderStatusForFulfillment(order, nextStatus);
 
+    appendTimelineEvent(
+      order,
+      buildTimelineEntry({
+        status: order.orderStatus,
+        label: getStatusLabel(order.orderStatus),
+        message: buildFulfillmentActivityDescription(
+          nextStatus === "shipped"
+            ? "ORDER_SHIPPED"
+            : nextStatus === "delivered"
+              ? "ORDER_DELIVERED"
+              : "ORDER_FULFILLMENT_UPDATED",
+          nextFulfillment,
+        ),
+        note: notes || nextFulfillment.notes || "",
+        createdBy: req.admin?._id || null,
+        actorType: "admin",
+        metadata: {
+          fulfillmentStatus: nextFulfillment.status,
+          trackingNumber: nextFulfillment.trackingNumber,
+        },
+      }),
+    );
+
     await order.save();
     await logFulfillmentActivities({
       req,
@@ -939,8 +999,180 @@ const updateOrderFulfillment = async (req, res) => {
       200,
       true,
       "Order fulfillment updated successfully",
-      updatedOrder
+      mapOrderForAdmin(updatedOrder)
     );
+  } catch (error) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+const updateOrderTracking = async (req, res) => {
+  try {
+    const { courierName, trackingNumber, trackingUrl, moveToShipped, note } = req.body;
+    const order = await Order.findById(req.params.id);
+
+    if (!order) {
+      return sendResponse(res, 404, false, "Order not found");
+    }
+
+    if (order.orderStatus === "cancelled") {
+      return sendResponse(res, 400, false, "Cancelled orders cannot receive tracking updates.");
+    }
+
+    const { order: updatedOrderState, shouldMoveToShipped } = applyTrackingUpdate(
+      order,
+      { courierName, trackingNumber, trackingUrl, moveToShipped },
+      {
+        createdBy: req.admin?._id || null,
+        actorType: "admin",
+        note,
+      },
+    );
+
+    if (shouldMoveToShipped) {
+      const currentStatus = updatedOrderState.orderStatus;
+      if (!["shipped", "out_for_delivery", "delivered"].includes(currentStatus)) {
+        const result = await applyOrderStatusChange(updatedOrderState, "shipped", {
+          createdBy: req.admin?._id || null,
+          actorType: "admin",
+          note,
+          allowAdminOverride: true,
+          reason: "tracking_added",
+          message: "Order marked as shipped",
+        });
+
+        if (!result.success) {
+          return sendResponse(res, 400, false, result.error);
+        }
+      }
+    }
+
+    await updatedOrderState.save();
+
+    await logActivity({
+      admin: req.admin._id,
+      action: "ORDER_TRACKING_UPDATED",
+      module: "ORDER",
+      description: `Tracking updated for order ${order.orderNumber}`,
+      entityId: order._id.toString(),
+      entityType: "Order",
+      metadata: {
+        trackingNumber: updatedOrderState.fulfillment?.trackingNumber,
+        courierName: updatedOrderState.fulfillment?.carrier,
+      },
+      ipAddress: req.ip,
+      userAgent: req.get("User-Agent"),
+    });
+
+    const updatedOrder = await getPopulatedOrder(order._id);
+    return sendResponse(
+      res,
+      200,
+      true,
+      "Order tracking updated successfully",
+      mapOrderForAdmin(updatedOrder),
+    );
+  } catch (error) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+const addOrderNote = async (req, res) => {
+  try {
+    const { note, isPrivate = true } = req.body;
+    const order = await Order.findById(req.params.id);
+
+    if (!order) {
+      return sendResponse(res, 404, false, "Order not found");
+    }
+
+    const result = addAdminNote(order, {
+      note,
+      isPrivate,
+      createdBy: req.admin?._id || null,
+    });
+
+    if (!result.success) {
+      return sendResponse(res, 400, false, result.error);
+    }
+
+    await order.save();
+
+    await logActivity({
+      admin: req.admin._id,
+      action: "ORDER_NOTE_ADDED",
+      module: "ORDER",
+      description: `Admin note added to order ${order.orderNumber}`,
+      entityId: order._id.toString(),
+      entityType: "Order",
+      ipAddress: req.ip,
+      userAgent: req.get("User-Agent"),
+    });
+
+    const updatedOrder = await getPopulatedOrder(order._id);
+    return sendResponse(res, 201, true, "Order note added successfully", mapOrderForAdmin(updatedOrder));
+  } catch (error) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+const processOrderRefund = async (req, res) => {
+  try {
+    const {
+      refundAmount,
+      refundReference,
+      paymentStatus = "refunded",
+      paymentReference,
+      note,
+      reason,
+    } = req.body;
+
+    const order = await Order.findById(req.params.id);
+
+    if (!order) {
+      return sendResponse(res, 404, false, "Order not found");
+    }
+
+    const result = applyRefundUpdate(
+      order,
+      {
+        refundAmount,
+        refundReference,
+        paymentStatus,
+        paymentReference,
+      },
+      {
+        createdBy: req.admin?._id || null,
+        actorType: "admin",
+        note,
+        reason,
+      },
+    );
+
+    if (!result.success) {
+      return sendResponse(res, 400, false, result.error);
+    }
+
+    await order.save();
+
+    await logActivity({
+      admin: req.admin._id,
+      action: "ORDER_REFUND_RECORDED",
+      module: "ORDER",
+      description: `Refund recorded for order ${order.orderNumber}`,
+      entityId: order._id.toString(),
+      entityType: "Order",
+      metadata: {
+        refundAmount: order.refundAmount,
+        refundReference: order.refundReference,
+        paymentStatus: order.paymentStatus,
+      },
+      ipAddress: req.ip,
+      userAgent: req.get("User-Agent"),
+    });
+
+    const updatedOrder = await getPopulatedOrder(order._id);
+    return sendResponse(res, 200, true, "Order refund recorded successfully", mapOrderForAdmin(updatedOrder));
   } catch (error) {
     return sendResponse(res, 500, false, error.message);
   }
@@ -972,5 +1204,9 @@ module.exports = {
   updateOrderStatus,
   updatePaymentStatus,
   updateOrderFulfillment,
-  deleteOrder
+  updateOrderTracking,
+  addOrderNote,
+  processOrderRefund,
+  deleteOrder,
+  mapOrderForPublic,
 };

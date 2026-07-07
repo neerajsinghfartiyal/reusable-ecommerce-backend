@@ -11,7 +11,8 @@
     "generate:import-template-xlsx": "node scripts/generateProductImportTemplateXlsx.js",
     "fix:category-indexes": "node scripts/fixCategoryIndexes.js",
     "smoke:variants": "node scripts/smokeProductVariants.js",
-    "smoke:variant-e2e": "node scripts/smokeVariantE2E.js"
+    "smoke:variant-e2e": "node scripts/smokeVariantE2E.js",
+    "smoke:orders": "node scripts/smokeOrderLifecycle.js"
   },
   "keywords": [],
   "author": "",
