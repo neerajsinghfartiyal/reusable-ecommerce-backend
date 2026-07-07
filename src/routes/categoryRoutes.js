@@ -1,22 +1,21 @@
 const express = require("express");
-const Category = require("../models/Category");
 const { protect } = require("../middleware/authMiddleware");
 const {
-  createMaster,
-  getAllMasters,
-  getMasterById,
-  updateMaster,
-  deleteMaster
-} = require("../controllers/masterController");
+  createCategory,
+  getCategories,
+  getCategoryById,
+  updateCategory,
+  deleteCategory,
+} = require("../controllers/categoryController");
 
 const router = express.Router();
 
 router.use(protect);
 
-router.post("/", createMaster(Category));
-router.get("/", getAllMasters(Category));
-router.get("/:id", getMasterById(Category));
-router.put("/:id", updateMaster(Category));
-router.delete("/:id", deleteMaster(Category));
+router.post("/", createCategory);
+router.get("/", getCategories);
+router.get("/:id", getCategoryById);
+router.put("/:id", updateCategory);
+router.delete("/:id", deleteCategory);
 
 module.exports = router;

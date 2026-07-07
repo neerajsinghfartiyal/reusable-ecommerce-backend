@@ -73,7 +73,7 @@ const pageSchema = new mongoose.Schema(
     },
     pageType: {
       type: String,
-      enum: ["page", "homepage", "landing", "policy", "blog", "custom"],
+      enum: ["page", "homepage", "landing", "policy", "blog", "custom", "catalog"],
       default: "page"
     },
     status: {

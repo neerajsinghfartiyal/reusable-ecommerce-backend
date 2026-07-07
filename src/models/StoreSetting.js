@@ -79,12 +79,12 @@ const storeSettingSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
-      default: "My Store"
+      default: "VELMORA"
     },
     storeTagline: {
       type: String,
       trim: true,
-      default: ""
+      default: "Shop Smarter. Live Better."
     },
     storeEmail: {
       type: String,

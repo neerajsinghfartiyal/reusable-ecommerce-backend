@@ -13,6 +13,7 @@ const {
   IMPORT_HEADERS,
   normalizeImportRow,
 } = require("../config/productImportSchema");
+const { getImportCategoryInput } = require("./categoryService");
 
 const MAX_IMPORT_ROWS = 10000;
 
@@ -138,11 +139,11 @@ const validateRow = (normalizedRow, rowNumber, context) => {
   }
 
   if (productType === "simple" || productType === "variable") {
-    const category = String(normalizedRow.category ?? "").trim();
+    const category = String(getImportCategoryInput(normalizedRow) || normalizedRow.category || "").trim();
     if (!category) {
       pushError(
         "category",
-        `category is required for ${productType} products.`,
+        `category is required for ${productType} products (use category or main/sub/child category columns).`,
         category,
       );
     }

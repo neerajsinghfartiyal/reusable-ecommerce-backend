@@ -1,6 +1,6 @@
 const express = require("express");
 const { protect } = require("../middleware/authMiddleware");
-const { uploadMediaFile } = require("../middleware/uploadMiddleware");
+const { runMediaUpload } = require("../middleware/uploadMiddleware");
 const {
   uploadMedia,
   getAllMedia,
@@ -16,7 +16,7 @@ const router = express.Router();
 
 router.use(protect);
 
-router.post("/upload", uploadMediaFile.single("file"), uploadMedia);
+router.post("/upload", runMediaUpload, uploadMedia);
 router.get("/", getAllMedia);
 router.get("/backfill/product-media-ids/dry-run", getProductMediaIdsBackfillDryRun);
 router.post("/backfill/product-media-ids/apply", applyProductMediaIdsBackfill);

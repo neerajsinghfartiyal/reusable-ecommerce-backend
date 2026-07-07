@@ -1,6 +1,9 @@
 const StoreSetting = require("../models/StoreSetting");
 const sendResponse = require("../utils/response");
-const { logActivity } = require("../utils/activityLogger");
+const {
+  DEMO_STORE_NAME,
+  DEMO_STORE_TAGLINE
+} = require("../constants/storeDefaults");const { logActivity } = require("../utils/activityLogger");
 const {
   applyStoreSettingsUpdate,
   toStoreSettingsResponse
@@ -12,7 +15,8 @@ const getStoreSettings = async (req, res) => {
 
     if (!settings) {
       settings = await StoreSetting.create({
-        storeName: "My Store"
+        storeName: DEMO_STORE_NAME,
+        storeTagline: DEMO_STORE_TAGLINE
       });
     }
 
@@ -34,7 +38,8 @@ const updateStoreSettings = async (req, res) => {
 
     if (!settings) {
       settings = await StoreSetting.create({
-        storeName: req.body?.storeName || "My Store"
+        storeName: req.body?.storeName || DEMO_STORE_NAME,
+        storeTagline: req.body?.storeTagline || DEMO_STORE_TAGLINE
       });
     }
 

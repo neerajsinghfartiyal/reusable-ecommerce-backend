@@ -7,7 +7,9 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "seed:admin": "node scripts/seedAdmin.js",
-    "generate:import-template-xlsx": "node scripts/generateProductImportTemplateXlsx.js"
+    "seed:store": "node scripts/seedStoreSettings.js",
+    "generate:import-template-xlsx": "node scripts/generateProductImportTemplateXlsx.js",
+    "fix:category-indexes": "node scripts/fixCategoryIndexes.js"
   },
   "keywords": [],
   "author": "",

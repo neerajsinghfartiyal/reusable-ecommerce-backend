@@ -2,7 +2,7 @@ const sendResponse = require("../utils/response");
 
 const createMaster = (Model) => async (req, res) => {
   try {
-    const { name, status, isActive, description, shortCode, options } = req.body;
+    const { name, status, isActive, description, shortCode, options, image } = req.body;
 
     if (!name) {
       return sendResponse(res, 400, false, "Name is required");
@@ -32,6 +32,10 @@ const createMaster = (Model) => async (req, res) => {
 
     if (Model.modelName === "Attribute") {
       payload.options = Array.isArray(options) ? options : [];
+    }
+
+    if (Model.modelName === "Category" && typeof image === "string") {
+      payload.image = image.trim();
     }
 
     const item = await Model.create(payload);
@@ -68,7 +72,7 @@ const getMasterById = (Model) => async (req, res) => {
 
 const updateMaster = (Model) => async (req, res) => {
   try {
-    const { name, status, isActive, description, shortCode, options } = req.body;
+    const { name, status, isActive, description, shortCode, options, image } = req.body;
 
     const item = await Model.findById(req.params.id);
 
@@ -94,6 +98,10 @@ const updateMaster = (Model) => async (req, res) => {
 
     if (Model.modelName === "Attribute" && Array.isArray(options)) {
       item.options = options;
+    }
+
+    if (Model.modelName === "Category" && typeof image === "string") {
+      item.image = image.trim();
     }
 
     await item.save();

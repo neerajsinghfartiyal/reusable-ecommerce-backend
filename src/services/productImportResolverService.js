@@ -8,6 +8,13 @@ const Brand = require("../models/Brand");
 const UnitType = require("../models/UnitType");
 const Attribute = require("../models/Attribute");
 const Product = require("../models/Product");
+const {
+  findCategoryInCatalog,
+  findOrCreateCategoryPath,
+  getImportCategoryInput,
+  getImportCategoryParts,
+  parseCategoryPathInput,
+} = require("./categoryService");
 
 const toSlug = (value) =>
   slugify(String(value || "").trim(), { lower: true, strict: true });
@@ -18,18 +25,18 @@ const normalizeKey = (value) =>
     .toLowerCase();
 
 const categoryPathCandidates = (raw) => {
-  const text = String(raw || "").trim();
-  if (!text) return [];
-  if (text.includes(">")) {
-    const parts = text.split(">").map((part) => part.trim()).filter(Boolean);
-    return [text, parts[parts.length - 1], parts.join(" / ")];
-  }
-  return [text];
+  const parts = parseCategoryPathInput(raw);
+  if (!parts.length) return [];
+  const text = parts.join(" > ");
+  return [text, parts[parts.length - 1], parts.join(" / "), ...parts];
 };
 
 const getCategoryCreateName = (raw) => {
-  const candidates = categoryPathCandidates(raw);
-  return candidates[candidates.length - 1] || String(raw || "").trim();
+  const parts = parseCategoryPathInput(raw);
+  if (parts.length > 0) {
+    return parts[parts.length - 1];
+  }
+  return String(raw || "").trim();
 };
 
 const findInCatalog = (
@@ -128,7 +135,7 @@ const buildResolverField = (input, resolved, entityType) => {
 
 const loadResolverCatalogs = async () => {
   const [categories, brands, unitTypes, attributes, products] = await Promise.all([
-    Category.find({}).select("name slug status").lean(),
+    Category.find({}).select("name slug status parent").lean(),
     Brand.find({}).select("name slug status").lean(),
     UnitType.find({}).select("name slug shortCode status").lean(),
     Attribute.find({}).select("name code values status").lean(),
@@ -195,7 +202,10 @@ const loadResolverCatalogs = async () => {
 };
 
 const resolveRowResolvers = (normalizedRow, catalogs) => {
-  const categoryMatch = findInCatalog(catalogs.categories, normalizedRow.category);
+  const categoryInput = getImportCategoryInput(normalizedRow);
+  const categoryMatch =
+    findCategoryInCatalog(catalogs.categories, categoryInput) ||
+    findInCatalog(catalogs.categories, categoryInput);
   const brandMatch = findInCatalog(catalogs.brands, normalizedRow.brand);
   const unitTypeMatch = findInCatalog(catalogs.unitTypes, normalizedRow.unit_type, {
     nameField: "name",
@@ -258,7 +268,7 @@ const resolveRowResolvers = (normalizedRow, catalogs) => {
   });
 
   const resolvers = {
-    category: buildResolverField(normalizedRow.category, categoryMatch, "category"),
+    category: buildResolverField(categoryInput, categoryMatch, "category"),
     brand: buildResolverField(normalizedRow.brand, brandMatch, "brand"),
     unitType: buildResolverField(normalizedRow.unit_type, unitTypeMatch, "unitType"),
     attributes: attributeResolvers,
@@ -408,6 +418,50 @@ const ensureEntityFromResolver = async (
   return null;
 };
 
+const ensureCategoryFromImport = async (
+  resolverField,
+  normalizedRow,
+  adminId,
+  { autoCreate = false } = {},
+) => {
+  const pathParts = getImportCategoryParts(normalizedRow);
+  const categoryInput = getImportCategoryInput(normalizedRow);
+
+  if (!categoryInput && pathParts.length === 0) {
+    return null;
+  }
+
+  if (resolverField?.status === "resolved" || resolverField?.status === "mapped") {
+    return resolverField.entityId;
+  }
+
+  const parts =
+    pathParts.length > 0
+      ? pathParts
+      : parseCategoryPathInput(resolverField?.input || categoryInput);
+
+  if (!parts.length) {
+    return null;
+  }
+
+  if (
+    autoCreate &&
+    (resolverField?.status === "create" ||
+      resolverField?.status === "unresolved" ||
+      resolverField?.status === "will_create")
+  ) {
+    const created = await findOrCreateCategoryPath(parts, adminId);
+    return created?._id?.toString() || null;
+  }
+
+  const existing = await findCategoryInCatalog(
+    await Category.find({}).select("name slug status parent").lean(),
+    parts.join(" > "),
+  );
+
+  return existing?.item?._id?.toString() || null;
+};
+
 const ensureAttributeWithValue = async (catalogs, attributeName, attributeValue, adminId) => {
   const name = String(attributeName || "").trim();
   const value = String(attributeValue || "").trim();
@@ -477,6 +531,9 @@ const markResolversForAutoCreate = (resolvers, normalizedRow, autoCreateCatalog)
       status: "will_create",
       entityName: getCategoryCreateName(next.category.input),
       matchType: "auto_create",
+      pathParts: getImportCategoryParts(normalizedRow).length
+        ? getImportCategoryParts(normalizedRow)
+        : parseCategoryPathInput(next.category.input),
     };
   }
 
@@ -519,10 +576,13 @@ module.exports = {
   resolveRowResolvers,
   applyRowMappings,
   ensureEntityFromResolver,
+  ensureCategoryFromImport,
   ensureAttributeWithValue,
   markResolversForAutoCreate,
   getRowResolverState,
   getCategoryCreateName,
+  getImportCategoryInput,
+  getImportCategoryParts,
   findInCatalog,
   toSlug,
   normalizeKey,

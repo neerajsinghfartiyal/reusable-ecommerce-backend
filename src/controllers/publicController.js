@@ -4,6 +4,12 @@ const Brand = require("../models/Brand");
 const Customer = require("../models/Customer");
 const StoreSetting = require("../models/StoreSetting");
 const sendResponse = require("../utils/response");
+const {
+  attachCategoryMeta,
+  buildCategoryTree,
+  getCategoryDescendantIds,
+  getCategoryPath,
+} = require("../services/categoryService");
 
 const getPublicProducts = async (req, res) => {
   try {
@@ -30,7 +36,8 @@ const getPublicProducts = async (req, res) => {
     }
 
     if (category) {
-      query.category = category;
+      const categoryIds = await getCategoryDescendantIds(category);
+      query.category = { $in: categoryIds };
     }
 
     if (brand) {
@@ -86,7 +93,16 @@ const getPublicProductBySlug = async (req, res) => {
       return sendResponse(res, 404, false, "Product not found");
     }
 
-    return sendResponse(res, 200, true, "Public product fetched successfully", product);
+    const productObject = product.toObject();
+    if (productObject.category?._id) {
+      productObject.categoryPath = await getCategoryPath(productObject.category._id);
+      productObject.categoryBreadcrumb = productObject.categoryPath.map((item) => item.name).join(" > ");
+    } else {
+      productObject.categoryPath = [];
+      productObject.categoryBreadcrumb = "";
+    }
+
+    return sendResponse(res, 200, true, "Public product fetched successfully", productObject);
   } catch (error) {
     return sendResponse(res, 500, false, error.message);
   }
@@ -94,11 +110,24 @@ const getPublicProductBySlug = async (req, res) => {
 
 const getPublicCategories = async (req, res) => {
   try {
-    const categories = await Category.find({ status: "active" })
-      .select("name slug")
-      .sort({ name: 1 });
+    const treeMode = String(req.query.tree || "").toLowerCase() === "true";
 
-    return sendResponse(res, 200, true, "Public categories fetched successfully", categories);
+    const categories = await Category.find({ status: "active" })
+      .select("name slug description image parent sortOrder status")
+      .sort({ sortOrder: 1, name: 1 })
+      .lean();
+
+    const flat = await attachCategoryMeta(categories);
+
+    if (treeMode) {
+      const tree = buildCategoryTree(flat);
+      return sendResponse(res, 200, true, "Public categories fetched successfully", {
+        categories: flat,
+        tree,
+      });
+    }
+
+    return sendResponse(res, 200, true, "Public categories fetched successfully", flat);
   } catch (error) {
     return sendResponse(res, 500, false, error.message);
   }

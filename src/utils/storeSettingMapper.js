@@ -1,3 +1,8 @@
+const {
+  DEMO_STORE_NAME,
+  DEMO_STORE_TAGLINE
+} = require("../constants/storeDefaults");
+
 const normalizeText = (value) =>
   typeof value === "string" ? value.trim() : value === null || value === undefined ? "" : String(value).trim();
 
@@ -64,7 +69,7 @@ const normalizeSocialInput = (social = {}, currentSocial = {}) => {
 };
 
 const applyStoreSettingsUpdate = (settings, body = {}) => {
-  if (body.storeName !== undefined) settings.storeName = normalizeText(body.storeName) || "My Store";
+  if (body.storeName !== undefined) settings.storeName = normalizeText(body.storeName) || DEMO_STORE_NAME;
   if (body.storeTagline !== undefined) settings.storeTagline = normalizeText(body.storeTagline);
   if (body.storeEmail !== undefined) settings.storeEmail = normalizeText(body.storeEmail).toLowerCase();
   if (body.storePhone !== undefined) settings.storePhone = normalizeText(body.storePhone);
@@ -183,8 +188,8 @@ const toPublicStoreSettings = (settings) => {
 
   if (!response) {
     return {
-      storeName: "My Store",
-      storeTagline: "",
+      storeName: DEMO_STORE_NAME,
+      storeTagline: DEMO_STORE_TAGLINE,
       storeEmail: "",
       storePhone: "",
       currency: "USD",
@@ -213,8 +218,8 @@ const toPublicStoreSettings = (settings) => {
   }
 
   return {
-    storeName: response.storeName || "My Store",
-    storeTagline: response.storeTagline || "",
+    storeName: response.storeName || DEMO_STORE_NAME,
+    storeTagline: response.storeTagline || DEMO_STORE_TAGLINE,
     storeEmail: response.storeEmail || "",
     storePhone: response.storePhone || "",
     currency: response.currency || "USD",

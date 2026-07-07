@@ -12,10 +12,12 @@ const { enrichPreviewRows } = require("./productImportEnhancedPreviewService");
 const {
   loadResolverCatalogs,
   ensureEntityFromResolver,
+  ensureCategoryFromImport,
   ensureAttributeWithValue,
   applyRowMappings,
   resolveRowResolvers,
   getCategoryCreateName,
+  getImportCategoryInput,
   getRowResolverState,
   markResolversForAutoCreate,
 } = require("./productImportResolverService");
@@ -62,10 +64,12 @@ const resolveEntityIdsForRow = async (
     ? markResolversForAutoCreate(mergedBase, normalizedData, true)
     : mergedBase;
 
-  const categoryId = await ensureEntityFromResolver(merged.category, Category, adminId, {}, {
-    autoCreate: autoCreateCatalog,
-    createName: getCategoryCreateName(merged.category?.input || merged.category?.entityName),
-  });
+  const categoryId = await ensureCategoryFromImport(
+    merged.category,
+    normalizedData,
+    adminId,
+    { autoCreate: autoCreateCatalog },
+  );
   const brandId = await ensureEntityFromResolver(merged.brand, Brand, adminId, {}, {
     autoCreate: autoCreateCatalog,
     createName: merged.brand?.entityName || merged.brand?.input,
@@ -77,7 +81,9 @@ const resolveEntityIdsForRow = async (
 
   const issues = [];
   const productType = String(row.productType || normalizedData.product_type || "").toLowerCase();
-  const categoryText = String(normalizedData.category || "").trim();
+  const categoryText = String(
+    getImportCategoryInput(normalizedData) || normalizedData.category || "",
+  ).trim();
   if ((productType === "simple" || productType === "variable") && categoryText && !categoryId) {
     issues.push(`Unresolved category "${categoryText}".`);
   }

@@ -7,36 +7,67 @@ const categorySchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
-      unique: true
     },
     slug: {
       type: String,
-      unique: true
+      unique: true,
     },
     description: {
       type: String,
       trim: true,
-      default: ""
+      default: "",
     },
     status: {
       type: String,
       enum: ["active", "inactive"],
-      default: "active"
+      default: "active",
+    },
+    image: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    parent: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Category",
+      default: null,
+    },
+    sortOrder: {
+      type: Number,
+      default: 0,
     },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Admin"
-    }
+      ref: "Admin",
+    },
   },
   {
-    timestamps: true
-  }
+    timestamps: true,
+  },
 );
 
-categorySchema.pre("save", function () {
-  if (this.name) {
-    this.slug = slugify(this.name, { lower: true, strict: true });
+categorySchema.index({ parent: 1, name: 1 }, { unique: true });
+categorySchema.index({ parent: 1, sortOrder: 1, name: 1 });
+categorySchema.index({ status: 1, parent: 1, sortOrder: 1 });
+
+categorySchema.pre("save", async function () {
+  if (!this.name) return;
+
+  const Category = this.constructor;
+  const pathNames = [String(this.name).trim()];
+  let currentParentId = this.parent || null;
+
+  while (currentParentId) {
+    const parentDoc = await Category.findById(currentParentId).select("name parent").lean();
+    if (!parentDoc) break;
+    pathNames.unshift(String(parentDoc.name || "").trim());
+    currentParentId = parentDoc.parent || null;
   }
+
+  this.slug = slugify(pathNames.filter(Boolean).join("-"), {
+    lower: true,
+    strict: true,
+  });
 });
 
 module.exports = mongoose.model("Category", categorySchema);

@@ -40,8 +40,15 @@ const getMediaTypeFromMime = (mimeType) => {
 const uploadMedia = async (req, res) => {
   try {
     if (!req.file) {
-      return sendResponse(res, 400, false, "File is required");
+      return sendResponse(res, 400, false, "File is required. Choose an image to upload.");
     }
+
+    const folder =
+      typeof req.body?.folder === "string" && req.body.folder.trim()
+        ? req.body.folder.trim()
+        : "general";
+    const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
+    const altText = typeof req.body?.altText === "string" ? req.body.altText.trim() : "";
 
     const media = await Media.create({
       fileName: req.file.filename,
@@ -51,12 +58,14 @@ const uploadMedia = async (req, res) => {
       mimeType: req.file.mimetype || "",
       size: req.file.size || 0,
       type: getMediaTypeFromMime(req.file.mimetype),
-      folder: "general",
-      uploadedBy: req.admin._id
+      folder,
+      title,
+      altText,
+      uploadedBy: req.admin?._id || null,
     });
 
     await logActivity({
-      admin: req.admin._id,
+      admin: req.admin?._id,
       action: "MEDIA_UPLOADED",
       module: "MEDIA",
       description: `Media uploaded: ${media.fileName}`,
@@ -64,20 +73,30 @@ const uploadMedia = async (req, res) => {
       entityType: "Media",
       metadata: {
         fileUrl: media.fileUrl,
-        mimeType: media.mimeType
+        mimeType: media.mimeType,
       },
       ipAddress: req.ip,
-      userAgent: req.get("User-Agent")
+      userAgent: req.get("User-Agent"),
     });
 
     const createdMedia = await Media.findById(media._id).populate(
       "uploadedBy",
-      "name email role"
+      "name email role",
     );
 
     return sendResponse(res, 201, true, "Media uploaded successfully", createdMedia);
   } catch (error) {
-    return sendResponse(res, 500, false, error.message);
+    console.error("Media upload failed:", {
+      message: error.message,
+      stack: error.stack,
+      adminId: req.admin?._id?.toString?.() || "",
+    });
+    return sendResponse(
+      res,
+      500,
+      false,
+      "Upload failed. Please check file type, size, or backend upload configuration.",
+    );
   }
 };
 

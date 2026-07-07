@@ -9,7 +9,7 @@ const {
   getPublicPaymentOptions,
   upsertCheckoutCustomer
 } = require("../controllers/publicController");
-const { getPublicPageBySlug, getPublicPages } = require("../controllers/pageController");
+const { getPublicPageBySlug, getPublicHomePage, getPublicPages } = require("../controllers/pageController");
 
 const router = express.Router();
 
@@ -22,6 +22,7 @@ router.get("/shipping-options", getPublicShippingOptions);
 router.get("/payment-options", getPublicPaymentOptions);
 router.post("/customers/checkout", upsertCheckoutCustomer);
 router.get("/pages", getPublicPages);
+router.get("/pages/home", getPublicHomePage);
 router.get("/pages/:slug", getPublicPageBySlug);
 
 module.exports = router;

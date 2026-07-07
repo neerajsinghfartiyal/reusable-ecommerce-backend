@@ -7,6 +7,46 @@ const normalizeSlug = (value) => {
   return slugify(String(value || ""), { lower: true, strict: true, trim: true });
 };
 
+const mapPublicSection = (section = {}) => ({
+  sectionKey: section.sectionKey || "",
+  sectionType: section.sectionType || "",
+  heading: section.heading || "",
+  subheading: section.subheading || "",
+  description: section.description || "",
+  image: section.image || "",
+  buttonText: section.buttonText || "",
+  buttonLink: section.buttonLink || "",
+  sortOrder: Number(section.sortOrder) || 0,
+  contentJson: section.content && typeof section.content === "object" ? section.content : {}
+});
+
+const mapPublicPage = (page) => {
+  const doc = page?.toObject ? page.toObject() : page || {};
+  const sections = (Array.isArray(doc.sections) ? doc.sections : [])
+    .filter((section) => section.isActive !== false)
+    .sort((left, right) => (left.sortOrder || 0) - (right.sortOrder || 0))
+    .map(mapPublicSection);
+
+  return {
+    title: doc.title || "",
+    slug: doc.slug || "",
+    pageType: doc.pageType || "page",
+    seoTitle: doc.seoTitle || "",
+    seoDescription: doc.seoDescription || "",
+    featuredImage: doc.featuredImage || "",
+    sections
+  };
+};
+
+const findPublishedHomePage = async () => {
+  const bySlug = await Page.findOne({ slug: "home", status: "published" });
+  if (bySlug) return bySlug;
+
+  return Page.findOne({ pageType: "homepage", status: "published" }).sort({
+    updatedAt: -1
+  });
+};
+
 const createPage = async (req, res) => {
   try {
     const {
@@ -244,7 +284,21 @@ const getPublicPageBySlug = async (req, res) => {
       return sendResponse(res, 404, false, "Page not found");
     }
 
-    return sendResponse(res, 200, true, "Public page fetched successfully", page);
+    return sendResponse(res, 200, true, "Public page fetched successfully", mapPublicPage(page));
+  } catch (error) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+const getPublicHomePage = async (req, res) => {
+  try {
+    const page = await findPublishedHomePage();
+
+    if (!page) {
+      return sendResponse(res, 404, false, "Home page not found");
+    }
+
+    return sendResponse(res, 200, true, "Public home page fetched successfully", mapPublicPage(page));
   } catch (error) {
     return sendResponse(res, 500, false, error.message);
   }
@@ -275,5 +329,6 @@ module.exports = {
   updatePage,
   deletePage,
   getPublicPageBySlug,
+  getPublicHomePage,
   getPublicPages
 };
